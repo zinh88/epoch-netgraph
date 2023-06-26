@@ -42,6 +42,8 @@
  * This file implements the base netgraph code.
  */
 
+#include <sys/cdefs.h>
+
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/ctype.h>
@@ -89,10 +91,10 @@ static struct rwlock	ng_topo_lock;
 static struct mtx	ng_nodelist_mtx; /* protects global node/hook lists */
 static struct mtx	ngq_mtx;	/* protects the queue item list */
 
-static SLIST_HEAD(, ng_node) ng_allnodes;
-static LIST_HEAD(, ng_node) ng_freenodes; /* in debug, we never free() them */
-static SLIST_HEAD(, ng_hook) ng_allhooks;
-static LIST_HEAD(, ng_hook) ng_freehooks; /* in debug, we never free() them */
+static CK_SLIST_HEAD(, ng_node) ng_allnodes;
+static CK_LIST_HEAD(, ng_node) ng_freenodes; /* in debug, we never free() them */
+static CK_SLIST_HEAD(, ng_hook) ng_allhooks;
+static CK_LIST_HEAD(, ng_hook) ng_freehooks; /* in debug, we never free() them */
 
 static void ng_dumpitems(void);
 static void ng_dumpnodes(void);
@@ -181,7 +183,7 @@ static struct rwlock	ng_typelist_lock;
 #define	TYPELIST_WUNLOCK()	rw_wunlock(&ng_typelist_lock)
 
 /* Hash related definitions. */
-LIST_HEAD(nodehash, ng_node);
+CK_LIST_HEAD(nodehash, ng_node);
 VNET_DEFINE_STATIC(struct nodehash *, ng_ID_hash);
 VNET_DEFINE_STATIC(u_long, ng_ID_hmask);
 VNET_DEFINE_STATIC(u_long, ng_nodes);
@@ -206,7 +208,7 @@ static struct rwlock	ng_idhash_lock;
 #define NG_IDHASH_FIND(ID, node)					\
 	do { 								\
 		rw_assert(&ng_idhash_lock, RA_LOCKED);			\
-		LIST_FOREACH(node, &V_ng_ID_hash[NG_IDHASH_FN(ID)],	\
+		CK_LIST_FOREACH(node, &V_ng_ID_hash[NG_IDHASH_FN(ID)],	\
 						nd_idnodes) {		\
 			if (NG_NODE_IS_VALID(node)			\
 			&& (NG_NODE_ID(node) == ID)) {			\
@@ -248,6 +250,7 @@ int	ng_make_node(const char *type, node_p *nodepp);
 int	ng_path_parse(char *addr, char **node, char **path, char **hook);
 void	ng_rmnode(node_p node, hook_p dummy1, void *dummy2, int dummy3);
 void	ng_unname(node_p node);
+void    ng_destroy_node(epoch_context_t ctx);
 
 /* Our own netgraph malloc type */
 MALLOC_DEFINE(M_NETGRAPH, "netgraph", "netgraph structures and ctrl messages");
@@ -296,9 +299,9 @@ static __inline hook_p
 ng_alloc_hook(void)
 {
 	hook_p hook;
-	SLIST_ENTRY(ng_hook) temp;
+	CK_SLIST_ENTRY(ng_hook) temp;
 	mtx_lock(&ng_nodelist_mtx);
-	hook = LIST_FIRST(&ng_freehooks);
+	hook = CK_LIST_FIRST(&ng_freehooks);
 	if (hook) {
 		LIST_REMOVE(hook, hk_hooks);
 		bcopy(&hook->hk_all, &temp, sizeof(temp));
@@ -312,7 +315,7 @@ ng_alloc_hook(void)
 		if (hook) {
 			hook->hk_magic = HK_MAGIC;
 			mtx_lock(&ng_nodelist_mtx);
-			SLIST_INSERT_HEAD(&ng_allhooks, hook, hk_all);
+			CK_SLIST_INSERT_HEAD(&ng_allhooks, hook, hk_all);
 			mtx_unlock(&ng_nodelist_mtx);
 		}
 	}
@@ -323,11 +326,11 @@ static __inline node_p
 ng_alloc_node(void)
 {
 	node_p node;
-	SLIST_ENTRY(ng_node) temp;
+	CK_SLIST_ENTRY(ng_node) temp;
 	mtx_lock(&ng_nodelist_mtx);
-	node = LIST_FIRST(&ng_freenodes);
+	node = CK_LIST_FIRST(&ng_freenodes);
 	if (node) {
-		LIST_REMOVE(node, nd_nodes);
+		CK_LIST_REMOVE(node, nd_nodes);
 		bcopy(&node->nd_all, &temp, sizeof(temp));
 		bzero(node, sizeof(struct ng_node));
 		bcopy(&temp, &node->nd_all, sizeof(temp));
@@ -339,7 +342,7 @@ ng_alloc_node(void)
 		if (node) {
 			node->nd_magic = ND_MAGIC;
 			mtx_lock(&ng_nodelist_mtx);
-			SLIST_INSERT_HEAD(&ng_allnodes, node, nd_all);
+			CK_SLIST_INSERT_HEAD(&ng_allnodes, node, nd_all);
 			mtx_unlock(&ng_nodelist_mtx);
 		}
 	}
@@ -360,7 +363,7 @@ ng_alloc_node(void)
 #define NG_FREE_NODE(node)						\
 	do {								\
 		mtx_lock(&ng_nodelist_mtx);				\
-		LIST_INSERT_HEAD(&ng_freenodes, node, nd_nodes);	\
+		CK_LIST_INSERT_HEAD(&ng_freenodes, node, nd_nodes);	\
 		node->nd_magic = 0;					\
 		mtx_unlock(&ng_nodelist_mtx);				\
 	} while (0)
@@ -686,7 +689,7 @@ ng_make_node_common(struct ng_type *type, node_p *nodepp)
 	V_ng_nodes++;
 	if (V_ng_nodes * 2 > V_ng_ID_hmask)
 		ng_ID_rehash();
-	LIST_INSERT_HEAD(&V_ng_ID_hash[NG_IDHASH_FN(node->nd_ID)], node,
+	CK_LIST_INSERT_HEAD(&V_ng_ID_hash[NG_IDHASH_FN(node->nd_ID)], node,
 	    nd_idnodes);
 	IDHASH_WUNLOCK();
 
@@ -788,6 +791,16 @@ ng_rmnode(node_p node, hook_p dummy1, void *dummy2, int dummy3)
 }
 
 /*
+ * Callback to safely free a node
+*/
+void
+ng_destroy_node(epoch_context_t ctx)
+{
+    node_p node = __containerof(ctx, struct ng_node, ng_node_epoch_ctx);
+    NG_FREE_NODE(node);
+}
+
+/*
  * Remove a reference to the node, possibly the last.
  * deadnode always acts as it were the last.
  */
@@ -806,17 +819,18 @@ ng_unref_node(node_p node)
 		NAMEHASH_WLOCK();
 		if (NG_NODE_HAS_NAME(node)) {
 			V_ng_named_nodes--;
-			LIST_REMOVE(node, nd_nodes);
+			CK_LIST_REMOVE(node, nd_nodes);
 		}
 		NAMEHASH_WUNLOCK();
 
 		IDHASH_WLOCK();
 		V_ng_nodes--;
-		LIST_REMOVE(node, nd_idnodes);
+		CK_LIST_REMOVE(node, nd_idnodes);
 		IDHASH_WUNLOCK();
 
 		mtx_destroy(&node->nd_input_queue.q_mtx);
-		NG_FREE_NODE(node);
+		//NG_FREE_NODE(node);
+        NET_EPOCH_CALL(ng_destroy_node, &node->ng_node_epoch_ctx);
 	}
 	CURVNET_RESTORE();
 }
@@ -881,7 +895,7 @@ ng_name_node(node_p node, const char *name)
 
 	hash = hash32_str(name, HASHINIT) & V_ng_name_hmask;
 	/* Check the name isn't already being used. */
-	LIST_FOREACH(node2, &V_ng_name_hash[hash], nd_nodes)
+	CK_LIST_FOREACH(node2, &V_ng_name_hash[hash], nd_nodes)
 		if (NG_NODE_IS_VALID(node2) &&
 		    (strcmp(NG_NODE_NAME(node2), name) == 0)) {
 			NAMEHASH_WUNLOCK();
@@ -889,13 +903,13 @@ ng_name_node(node_p node, const char *name)
 		}
 
 	if (NG_NODE_HAS_NAME(node))
-		LIST_REMOVE(node, nd_nodes);
+		CK_LIST_REMOVE(node, nd_nodes);
 	else
 		V_ng_named_nodes++;
 	/* Copy it. */
 	strlcpy(NG_NODE_NAME(node), name, NG_NODESIZ);
 	/* Update name hash. */
-	LIST_INSERT_HEAD(&V_ng_name_hash[hash], node, nd_nodes);
+	CK_LIST_INSERT_HEAD(&V_ng_name_hash[hash], node, nd_nodes);
 	NAMEHASH_WUNLOCK();
 
 	return (0);
@@ -932,7 +946,7 @@ ng_name2noderef(node_p here, const char *name)
 	/* Find node by name. */
 	hash = hash32_str(name, HASHINIT) & V_ng_name_hmask;
 	NAMEHASH_RLOCK();
-	LIST_FOREACH(node, &V_ng_name_hash[hash], nd_nodes)
+	CK_LIST_FOREACH(node, &V_ng_name_hash[hash], nd_nodes)
 		if (NG_NODE_IS_VALID(node) &&
 		    (strcmp(NG_NODE_NAME(node), name) == 0)) {
 			NG_NODE_REF(node);
@@ -994,12 +1008,12 @@ ng_name_rehash(void)
 		return;
 
 	for (i = 0; i <= V_ng_name_hmask; i++)
-		LIST_FOREACH_SAFE(node, &V_ng_name_hash[i], nd_nodes, node2) {
+		CK_LIST_FOREACH_SAFE(node, &V_ng_name_hash[i], nd_nodes, node2) {
 #ifdef INVARIANTS
-			LIST_REMOVE(node, nd_nodes);
+			CK_LIST_REMOVE(node, nd_nodes);
 #endif
 			hash = hash32_str(NG_NODE_NAME(node), HASHINIT) & hmask;
-			LIST_INSERT_HEAD(&new[hash], node, nd_nodes);
+			CK_LIST_INSERT_HEAD(&new[hash], node, nd_nodes);
 		}
 
 	hashdestroy(V_ng_name_hash, M_NETGRAPH_NODE, V_ng_name_hmask);
@@ -1025,12 +1039,12 @@ ng_ID_rehash(void)
 		return;
 
 	for (i = 0; i <= V_ng_ID_hmask; i++)
-		LIST_FOREACH_SAFE(node, &V_ng_ID_hash[i], nd_idnodes, node2) {
+		CK_LIST_FOREACH_SAFE(node, &V_ng_ID_hash[i], nd_idnodes, node2) {
 #ifdef INVARIANTS
-			LIST_REMOVE(node, nd_idnodes);
+			CK_LIST_REMOVE(node, nd_idnodes);
 #endif
 			hash = (node->nd_ID % (hmask + 1));
-			LIST_INSERT_HEAD(&new[hash], node, nd_idnodes);
+			CK_LIST_INSERT_HEAD(&new[hash], node, nd_idnodes);
 		}
 
 	hashdestroy(V_ng_ID_hash, M_NETGRAPH_NODE, V_ng_name_hmask);
@@ -2681,7 +2695,7 @@ ng_generic_msg(node_p here, item_p item, hook_p lasthook)
 		/* Cycle through the lists of nodes. */
 		nl->numnames = 0;
 		for (i = 0; i <= V_ng_ID_hmask; i++) {
-			LIST_FOREACH(node, &V_ng_ID_hash[i], nd_idnodes) {
+			CK_LIST_FOREACH(node, &V_ng_ID_hash[i], nd_idnodes) {
 				struct nodeinfo *const np =
 				    &nl->nodeinfo[nl->numnames];
 
@@ -2720,7 +2734,7 @@ ng_generic_msg(node_p here, item_p item, hook_p lasthook)
 		/* Cycle through the lists of nodes. */
 		nl->numnames = 0;
 		for (i = 0; i <= V_ng_name_hmask; i++) {
-			LIST_FOREACH(node, &V_ng_name_hash[i], nd_nodes) {
+			CK_LIST_FOREACH(node, &V_ng_name_hash[i], nd_nodes) {
 				struct nodeinfo *const np =
 				    &nl->nodeinfo[nl->numnames];
 
@@ -3161,7 +3175,7 @@ vnet_netgraph_uninit(const void *unused __unused)
 		/* Find a node to kill */
 		IDHASH_RLOCK();
 		for (i = 0; i <= V_ng_ID_hmask; i++) {
-			LIST_FOREACH(node, &V_ng_ID_hash[i], nd_idnodes) {
+			CK_LIST_FOREACH(node, &V_ng_ID_hash[i], nd_idnodes) {
 				if (node != &ng_deadnode) {
 					NG_NODE_REF(node);
 					break;
@@ -3351,7 +3365,7 @@ ng_dumpnodes(void)
 	node_p node;
 	int i = 1;
 	mtx_lock(&ng_nodelist_mtx);
-	SLIST_FOREACH(node, &ng_allnodes, nd_all) {
+	CK_SLIST_FOREACH(node, &ng_allnodes, nd_all) {
 		printf("[%d] ", i++);
 		dumpnode(node, NULL, 0);
 	}
@@ -3364,7 +3378,7 @@ ng_dumphooks(void)
 	hook_p hook;
 	int i = 1;
 	mtx_lock(&ng_nodelist_mtx);
-	SLIST_FOREACH(hook, &ng_allhooks, hk_all) {
+	CK_SLIST_FOREACH(hook, &ng_allhooks, hk_all) {
 		printf("[%d] ", i++);
 		dumphook(hook, NULL, 0);
 	}

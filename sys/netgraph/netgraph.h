@@ -54,6 +54,8 @@
 #include <sys/module.h>
 #include <sys/mutex.h>
 #include <sys/refcount.h>
+#include <sys/ck.h>
+#include <sys/epoch.h>
 
 #ifdef HAVE_KERNEL_OPTION_HEADERS
 #include "opt_netgraph.h"
@@ -129,7 +131,7 @@ struct ng_hook {
 	int	hk_magic;
 	char	*lastfile;
 	int	lastline;
-	SLIST_ENTRY(ng_hook)	  hk_all;		/* all existing items */
+	CK_SLIST_ENTRY(ng_hook)	  hk_all;		/* all existing items */
 #endif	/* NETGRAPH_DEBUG */ /*----------------------------------------------*/
 };
 /* Flags for a hook */
@@ -370,17 +372,18 @@ struct ng_node {
 	void   *nd_private;		/* node type dependent node ID */
 	ng_ID_t	nd_ID;			/* Unique per node */
 	LIST_HEAD(hooks, ng_hook) nd_hooks;	/* linked list of node hooks */
-	LIST_ENTRY(ng_node)	  nd_nodes;	/* name hash collision list */
-	LIST_ENTRY(ng_node)	  nd_idnodes;	/* ID hash collision list */
+	CK_LIST_ENTRY(ng_node)	  nd_nodes;	/* name hash collision list */
+	CK_LIST_ENTRY(ng_node)	  nd_idnodes;	/* ID hash collision list */
 	struct	ng_queue	  nd_input_queue; /* input queue for locking */
 	int	nd_refs;		/* # of references to this node */
 	struct	vnet		 *nd_vnet;	/* network stack instance */
+    struct epoch_context ng_node_epoch_ctx;
 #ifdef	NETGRAPH_DEBUG /*----------------------------------------------*/
 #define ND_MAGIC 0x59264837
 	int	nd_magic;
 	char	*lastfile;
 	int	lastline;
-	SLIST_ENTRY(ng_node)	  nd_all;	/* all existing nodes */
+	CK_SLIST_ENTRY(ng_node)	  nd_all;	/* all existing nodes */
 #endif	/* NETGRAPH_DEBUG */ /*----------------------------------------------*/
 };
 

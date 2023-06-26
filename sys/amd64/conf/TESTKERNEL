@@ -1,0 +1,9 @@
+include GENERIC
+ident TESTKERNEL
+
+options NETGRAPH
+options NETGRAPH_TEE
+options NETGRAPH_SOCKET
+options NETGRAPH_ECHO
+options NETGRAPH_SOURCE
+
