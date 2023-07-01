@@ -653,7 +653,7 @@ ng_btsocket_hci_raw_output(node_p node, hook_p hook, void *arg1, int arg2)
 	 * we used ng_send_fn() and we should have exclusive lock on the node.
 	 */
 
-	LIST_FOREACH(hook, &node->nd_hooks, hk_hooks) {
+	CK_LIST_FOREACH(hook, &node->nd_hooks, hk_hooks) {
 		if (hook == NULL || NG_HOOK_NOT_VALID(hook) || 
 		    NG_NODE_NOT_VALID(NG_PEER_NODE(hook)))
 			continue;

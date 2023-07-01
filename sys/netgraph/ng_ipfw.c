@@ -216,7 +216,7 @@ ng_ipfw_findhook1(node_p node, u_int16_t rulenum)
 	hook_p	hook;
 	hpriv_p	hpriv;
 
-	LIST_FOREACH(hook, &node->nd_hooks, hk_hooks) {
+	CK_LIST_FOREACH(hook, &node->nd_hooks, hk_hooks) {
 		hpriv = NG_HOOK_PRIVATE(hook);
 		if (NG_HOOK_IS_VALID(hook) && (hpriv->rulenum == rulenum))
                         return (hook);

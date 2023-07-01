@@ -451,7 +451,7 @@ ngd_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *addr,
 		 * If exactly one hook exists, just use it.
 		 * Special case to allow write(2) to work on an ng_socket.
 		 */
-		hook = LIST_FIRST(&pcbp->sockdata->node->nd_hooks);
+		hook = CK_LIST_FIRST(&pcbp->sockdata->node->nd_hooks);
 	} else {
 		if (len >= NG_HOOKSIZ) {
 			error = EINVAL;
@@ -801,7 +801,7 @@ ngs_rehash(node_p node)
 	if (new == NULL)
 		return;
 
-	LIST_FOREACH(hook, &node->nd_hooks, hk_hooks) {
+	CK_LIST_FOREACH(hook, &node->nd_hooks, hk_hooks) {
 		hp = NG_HOOK_PRIVATE(hook);
 #ifdef INVARIANTS
 		LIST_REMOVE(hp, next);
@@ -872,7 +872,7 @@ ngs_findhook(node_p node, const char *name)
 	if (node->nd_numhooks == 1) {
 		hook_p hook;
 
-		hook = LIST_FIRST(&node->nd_hooks);
+		hook = CK_LIST_FIRST(&node->nd_hooks);
 
 		if (strcmp(NG_HOOK_NAME(hook), name) == 0)
 			return (hook);

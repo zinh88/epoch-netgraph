@@ -623,7 +623,7 @@ pppoe_finduniq(node_p node, const struct pppoe_tag *tag)
 	sessp	sp;
 
 	/* Cycle through all known hooks. */
-	LIST_FOREACH(hook, &node->nd_hooks, hk_hooks) {
+	CK_LIST_FOREACH(hook, &node->nd_hooks, hk_hooks) {
 		/* Skip any nonsession hook. */
 		if (NG_HOOK_PRIVATE(hook) == NULL)
 			continue;
@@ -649,7 +649,7 @@ pppoe_findcookie(node_p node, const struct pppoe_tag *tag)
 
 	bcopy(tag + 1, cookie.bytes, sizeof(void *));
 	/* Cycle through all known hooks. */
-	LIST_FOREACH(hook, &node->nd_hooks, hk_hooks) {
+	CK_LIST_FOREACH(hook, &node->nd_hooks, hk_hooks) {
 		/* Skip any nonsession hook. */
 		if (NG_HOOK_PRIVATE(hook) == NULL)
 			continue;

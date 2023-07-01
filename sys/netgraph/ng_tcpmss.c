@@ -366,7 +366,7 @@ ng_tcpmss_disconnect(hook_p hook)
 	node_p node = NG_HOOK_NODE(hook);
 	hook_p hook2;
 
-	LIST_FOREACH(hook2, &node->nd_hooks, hk_hooks) {
+	CK_LIST_FOREACH(hook2, &node->nd_hooks, hk_hooks) {
 		hpriv_p priv = NG_HOOK_PRIVATE(hook2);
 
 		if (priv->outHook == hook)

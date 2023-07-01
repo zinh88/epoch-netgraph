@@ -122,10 +122,11 @@ struct ng_hook {
 	int	hk_type;		/* tbd: hook data link type */
 	struct	ng_hook *hk_peer;	/* the other end of this link */
 	struct	ng_node *hk_node;	/* The node this hook is attached to */
-	LIST_ENTRY(ng_hook) hk_hooks;	/* linked list of all hooks on node */
+	CK_LIST_ENTRY(ng_hook) hk_hooks;	/* linked list of all hooks on node */
 	ng_rcvmsg_t	*hk_rcvmsg;	/* control messages come here */
 	ng_rcvdata_t	*hk_rcvdata;	/* data comes here */
 	int	hk_refs;		/* dont actually free this till 0 */
+	struct epoch_context ng_hook_epoch_ctx;
 #ifdef	NETGRAPH_DEBUG /*----------------------------------------------*/
 #define HK_MAGIC 0x78573011
 	int	hk_magic;
@@ -371,13 +372,14 @@ struct ng_node {
 	int	nd_numhooks;		/* number of hooks */
 	void   *nd_private;		/* node type dependent node ID */
 	ng_ID_t	nd_ID;			/* Unique per node */
-	LIST_HEAD(hooks, ng_hook) nd_hooks;	/* linked list of node hooks */
+	CK_LIST_HEAD(hooks, ng_hook) nd_hooks;	/* linked list of node hooks */
 	CK_LIST_ENTRY(ng_node)	  nd_nodes;	/* name hash collision list */
 	CK_LIST_ENTRY(ng_node)	  nd_idnodes;	/* ID hash collision list */
 	struct	ng_queue	  nd_input_queue; /* input queue for locking */
 	int	nd_refs;		/* # of references to this node */
 	struct	vnet		 *nd_vnet;	/* network stack instance */
-    struct epoch_context ng_node_epoch_ctx;
+	struct epoch_context ng_node_epoch_ctx; 
+	struct mtx node_mtx;
 #ifdef	NETGRAPH_DEBUG /*----------------------------------------------*/
 #define ND_MAGIC 0x59264837
 	int	nd_magic;
@@ -435,7 +437,7 @@ typedef	int	ng_fn_eachhook(hook_p hook, void* arg);
 #define _NG_NODE_FOREACH_HOOK(node, fn, arg)				\
 	do {								\
 		hook_p _hook;						\
-		LIST_FOREACH(_hook, &((node)->nd_hooks), hk_hooks) {	\
+		CK_LIST_FOREACH(_hook, &((node)->nd_hooks), hk_hooks) {	\
 			if ((fn)(_hook, arg) == 0) {			\
 				break;					\
 			}						\

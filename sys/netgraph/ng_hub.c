@@ -128,7 +128,7 @@ ng_hub_rcvdata(hook_p hook, item_p item)
 		NG_FREE_ITEM(item);
 		return (0);
 	}
-	LIST_FOREACH(hook2, &node->nd_hooks, hk_hooks) {
+	CK_LIST_FOREACH(hook2, &node->nd_hooks, hk_hooks) {
 		if (hook2 == hook)
 			continue;
 		if (--nhooks == 1)

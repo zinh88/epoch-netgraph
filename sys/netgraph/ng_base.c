@@ -129,7 +129,7 @@ struct ng_node ng_deadnode = {
 	0,	/* numhooks */
 	NULL,	/* private */
 	0,	/* ID */
-	LIST_HEAD_INITIALIZER(ng_deadnode.nd_hooks),
+	CK_LIST_HEAD_INITIALIZER(ng_deadnode.nd_hooks),
 	{},	/* all_nodes list entry */
 	{},	/* id hashtable list entry */
 	{	0,
@@ -241,6 +241,8 @@ static int	ng_mkpeer(node_p node, const char *name, const char *name2,
 		    char *type);
 static void	ng_name_rehash(void);
 static void	ng_ID_rehash(void);
+static void ng_kill_node(epoch_context_t ctx);
+static void ng_kill_hook(epoch_context_t ctx);
 
 /* Imported, these used to be externally visible, some may go back. */
 void	ng_destroy_hook(hook_p hook);
@@ -250,7 +252,7 @@ int	ng_make_node(const char *type, node_p *nodepp);
 int	ng_path_parse(char *addr, char **node, char **path, char **hook);
 void	ng_rmnode(node_p node, hook_p dummy1, void *dummy2, int dummy3);
 void	ng_unname(node_p node);
-void    ng_destroy_node(epoch_context_t ctx);
+
 
 /* Our own netgraph malloc type */
 MALLOC_DEFINE(M_NETGRAPH, "netgraph", "netgraph structures and ctrl messages");
@@ -285,7 +287,7 @@ static MALLOC_DEFINE(M_NETGRAPH_ITEM, "netgraph_item",
 	mtx_sleep(&ng_worklist, &ng_worklist_mtx, PI_NET, "sleep", 0)
 #define	NG_WORKLIST_WAKEUP()			\
 	wakeup_one(&ng_worklist)
-
+	
 #ifdef NETGRAPH_DEBUG /*----------------------------------------------*/
 /*
  * In debug mode:
@@ -303,7 +305,7 @@ ng_alloc_hook(void)
 	mtx_lock(&ng_nodelist_mtx);
 	hook = CK_LIST_FIRST(&ng_freehooks);
 	if (hook) {
-		LIST_REMOVE(hook, hk_hooks);
+		CK_LIST_REMOVE(hook, hk_hooks);
 		bcopy(&hook->hk_all, &temp, sizeof(temp));
 		bzero(hook, sizeof(struct ng_hook));
 		bcopy(&temp, &hook->hk_all, sizeof(temp));
@@ -355,7 +357,7 @@ ng_alloc_node(void)
 #define NG_FREE_HOOK(hook)						\
 	do {								\
 		mtx_lock(&ng_nodelist_mtx);				\
-		LIST_INSERT_HEAD(&ng_freehooks, hook, hk_hooks);	\
+		CK_LIST_INSERT_HEAD(&ng_freehooks, hook, hk_hooks);	\
 		hook->hk_magic = 0;					\
 		mtx_unlock(&ng_nodelist_mtx);				\
 	} while (0)
@@ -670,9 +672,10 @@ ng_make_node_common(struct ng_type *type, node_p *nodepp)
 	NG_QUEUE_LOCK_INIT(&node->nd_input_queue);
 	STAILQ_INIT(&node->nd_input_queue.queue);
 	node->nd_input_queue.q_flags = 0;
+	mtx_init(&node->node_mtx, "nodemtx", NULL, MTX_DEF);
 
 	/* Initialize hook list for new node */
-	LIST_INIT(&node->nd_hooks);
+	CK_LIST_INIT(&node->nd_hooks);
 
 	/* Get an ID and put us in the hash chain. */
 	IDHASH_WLOCK();
@@ -746,7 +749,7 @@ ng_rmnode(node_p node, hook_p dummy1, void *dummy2, int dummy3)
 		(*node->nd_type->close)(node);
 
 	/* Notify all remaining connected nodes to disconnect */
-	while ((hook = LIST_FIRST(&node->nd_hooks)) != NULL)
+	while ((hook = CK_LIST_FIRST(&node->nd_hooks)) != NULL)
 		ng_destroy_hook(hook);
 
 	/*
@@ -792,12 +795,12 @@ ng_rmnode(node_p node, hook_p dummy1, void *dummy2, int dummy3)
 
 /*
  * Callback to safely free a node
-*/
-void
-ng_destroy_node(epoch_context_t ctx)
+ */
+static void
+ng_kill_node(epoch_context_t ctx)
 {
-    node_p node = __containerof(ctx, struct ng_node, ng_node_epoch_ctx);
-    NG_FREE_NODE(node);
+	node_p node = __containerof(ctx, struct ng_node, ng_node_epoch_ctx);
+	NG_FREE_NODE(node);
 }
 
 /*
@@ -829,8 +832,9 @@ ng_unref_node(node_p node)
 		IDHASH_WUNLOCK();
 
 		mtx_destroy(&node->nd_input_queue.q_mtx);
+		mtx_destroy(&node->node_mtx);
 		//NG_FREE_NODE(node);
-        NET_EPOCH_CALL(ng_destroy_node, &node->ng_node_epoch_ctx);
+		NET_EPOCH_CALL(ng_kill_node, &node->ng_node_epoch_ctx);
 	}
 	CURVNET_RESTORE();
 }
@@ -1072,8 +1076,18 @@ ng_unref_hook(hook_p hook)
 	if (refcount_release(&hook->hk_refs)) { /* we were the last */
 		if (_NG_HOOK_NODE(hook)) /* it'll probably be ng_deadnode */
 			_NG_NODE_UNREF((_NG_HOOK_NODE(hook)));
-		NG_FREE_HOOK(hook);
+		NET_EPOCH_CALL(ng_kill_hook, &hook->ng_hook_epoch_ctx);
 	}
+}
+
+/*
+ * Callback to safely free a hook
+ */
+static void
+ng_kill_hook(epoch_context_t ctx)
+{
+	hook_p hook = __containerof(ctx, struct ng_hook, ng_hook_epoch_ctx);
+	NG_FREE_HOOK(hook);
 }
 
 /*
@@ -1125,7 +1139,7 @@ ng_add_hook(node_p node, const char *name, hook_p *hookp)
 	 * The 'type' agrees so far, so go ahead and link it in.
 	 * We'll ask again later when we actually connect the hooks.
 	 */
-	LIST_INSERT_HEAD(&node->nd_hooks, hook, hk_hooks);
+	CK_LIST_INSERT_HEAD(&node->nd_hooks, hook, hk_hooks);
 	node->nd_numhooks++;
 	NG_HOOK_REF(hook);	/* one for the node */
 
@@ -1145,14 +1159,18 @@ hook_p
 ng_findhook(node_p node, const char *name)
 {
 	hook_p hook;
+	struct epoch_tracker et;
 
 	if (node->nd_type->findhook != NULL)
 		return (*node->nd_type->findhook)(node, name);
-	LIST_FOREACH(hook, &node->nd_hooks, hk_hooks) {
+
+	NET_EPOCH_ENTER(et);
+	CK_LIST_FOREACH(hook, &node->nd_hooks, hk_hooks) {
 		if (NG_HOOK_IS_VALID(hook) &&
 		    (strcmp(NG_HOOK_NAME(hook), name) == 0))
 			return (hook);
 	}
+	NET_EPOCH_EXIT(et);
 	return (NULL);
 }
 
@@ -1228,7 +1246,10 @@ ng_destroy_hook(hook_p hook)
 	if (node == &ng_deadnode) { /* happens if called from ng_con_nodes() */
 		return;
 	}
-	LIST_REMOVE(hook, hk_hooks);
+	mtx_lock(&node->node_mtx);
+	CK_LIST_REMOVE(hook, hk_hooks);
+	mtx_unlock(&node->node_mtx);
+
 	node->nd_numhooks--;
 	if (node->nd_type->disconnect) {
 		/*
@@ -1443,7 +1464,7 @@ ng_con_part2(node_p node, item_p item, hook_p hook)
 	 */
 	hook->hk_node = node;		/* just overwrite ng_deadnode */
 	NG_NODE_REF(node);		/* each hook counts as a reference */
-	LIST_INSERT_HEAD(&node->nd_hooks, hook, hk_hooks);
+	CK_LIST_INSERT_HEAD(&node->nd_hooks, hook, hk_hooks);
 	node->nd_numhooks++;
 	NG_HOOK_REF(hook);	/* one for the node */
 
@@ -2651,7 +2672,7 @@ ng_generic_msg(node_p here, item_p item, hook_p lasthook)
 
 		/* Cycle through the linked list of hooks */
 		ni->hooks = 0;
-		LIST_FOREACH(hook, &here->nd_hooks, hk_hooks) {
+		CK_LIST_FOREACH(hook, &here->nd_hooks, hk_hooks) {
 			struct linkinfo *const link = &hl->link[ni->hooks];
 
 			if (ni->hooks >= nhooks) {
@@ -3612,19 +3633,20 @@ ng_address_hook(node_p here, item_p item, hook_p hook, ng_ID_t retaddr)
 	hook_p peer;
 	node_p peernode;
 	ITEM_DEBUG_CHECKS;
+	struct epoch_tracker et;
 	/*
 	 * Quick sanity check..
 	 * Since a hook holds a reference on its node, once we know
 	 * that the peer is still connected (even if invalid,) we know
 	 * that the peer node is present, though maybe invalid.
 	 */
-	TOPOLOGY_RLOCK();
+	NET_EPOCH_ENTER(et);
 	if ((hook == NULL) || NG_HOOK_NOT_VALID(hook) ||
 	    NG_HOOK_NOT_VALID(peer = NG_HOOK_PEER(hook)) ||
 	    NG_NODE_NOT_VALID(peernode = NG_PEER_NODE(hook))) {
 		NG_FREE_ITEM(item);
 		TRAP_ERROR();
-		TOPOLOGY_RUNLOCK();
+		NET_EPOCH_EXIT(et);
 		return (ENETDOWN);
 	}
 
@@ -3637,7 +3659,7 @@ ng_address_hook(node_p here, item_p item, hook_p hook, ng_ID_t retaddr)
 	NGI_SET_NODE(item, peernode);
 	SET_RETADDR(item, here, retaddr);
 
-	TOPOLOGY_RUNLOCK();
+	NET_EPOCH_EXIT(et);
 
 	return (0);
 }

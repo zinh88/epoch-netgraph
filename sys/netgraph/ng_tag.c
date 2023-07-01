@@ -615,7 +615,7 @@ ng_tag_disconnect(hook_p hook)
 
 	KASSERT(hip != NULL, ("%s: null info", __func__));
 
-	LIST_FOREACH(hook2, &node->nd_hooks, hk_hooks) {
+	CK_LIST_FOREACH(hook2, &node->nd_hooks, hk_hooks) {
 		hinfo_p priv = NG_HOOK_PRIVATE(hook2);
 
 		if (priv->hi_match == hook)
