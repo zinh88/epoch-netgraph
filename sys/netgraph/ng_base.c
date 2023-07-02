@@ -723,13 +723,15 @@ void
 ng_rmnode(node_p node, hook_p dummy1, void *dummy2, int dummy3)
 {
 	hook_p hook;
-
+	// mtx_lock(&node->node_mtx);
 	/* Check if it's already shutting down */
 	if ((node->nd_flags & NGF_CLOSING) != 0)
+		// mtx_unlock(&node->node_mtx);
 		return;
 
 	if (node == &ng_deadnode) {
 		printf ("shutdown called on deadnode\n");
+		// mtx_unlock(&node->node_mtx);
 		return;
 	}
 
@@ -743,7 +745,7 @@ ng_rmnode(node_p node, hook_p dummy1, void *dummy2, int dummy3)
 	 * creation
 	 */
 	node->nd_flags |= NGF_INVALID|NGF_CLOSING;
-
+	// mtx_unlock(&node->node_mtx);
 	/* If node has its pre-shutdown method, then call it first*/
 	if (node->nd_type && node->nd_type->close)
 		(*node->nd_type->close)(node);
@@ -833,7 +835,7 @@ ng_unref_node(node_p node)
 
 		mtx_destroy(&node->nd_input_queue.q_mtx);
 		mtx_destroy(&node->node_mtx);
-		//NG_FREE_NODE(node);
+		// NG_FREE_NODE(node);
 		NET_EPOCH_CALL(ng_kill_node, &node->ng_node_epoch_ctx);
 	}
 	CURVNET_RESTORE();
@@ -1077,6 +1079,7 @@ ng_unref_hook(hook_p hook)
 		if (_NG_HOOK_NODE(hook)) /* it'll probably be ng_deadnode */
 			_NG_NODE_UNREF((_NG_HOOK_NODE(hook)));
 		NET_EPOCH_CALL(ng_kill_hook, &hook->ng_hook_epoch_ctx);
+		// NG_FREE_HOOK(hook);
 	}
 }
 
@@ -1168,6 +1171,7 @@ ng_findhook(node_p node, const char *name)
 	CK_LIST_FOREACH(hook, &node->nd_hooks, hk_hooks) {
 		if (NG_HOOK_IS_VALID(hook) &&
 		    (strcmp(NG_HOOK_NAME(hook), name) == 0))
+			NET_EPOCH_EXIT(et);
 			return (hook);
 	}
 	NET_EPOCH_EXIT(et);
@@ -1246,9 +1250,9 @@ ng_destroy_hook(hook_p hook)
 	if (node == &ng_deadnode) { /* happens if called from ng_con_nodes() */
 		return;
 	}
-	mtx_lock(&node->node_mtx);
+	// mtx_lock(&node->node_mtx);
 	CK_LIST_REMOVE(hook, hk_hooks);
-	mtx_unlock(&node->node_mtx);
+	//mtx_unlock(&node->node_mtx);
 
 	node->nd_numhooks--;
 	if (node->nd_type->disconnect) {
@@ -3633,7 +3637,7 @@ ng_address_hook(node_p here, item_p item, hook_p hook, ng_ID_t retaddr)
 	hook_p peer;
 	node_p peernode;
 	ITEM_DEBUG_CHECKS;
-	struct epoch_tracker et;
+	// struct epoch_tracker et;
 	/*
 	 * Quick sanity check..
 	 * Since a hook holds a reference on its node, once we know
@@ -3641,12 +3645,14 @@ ng_address_hook(node_p here, item_p item, hook_p hook, ng_ID_t retaddr)
 	 * that the peer node is present, though maybe invalid.
 	 */
 	NET_EPOCH_ENTER(et);
+	// TOPOLOGY_RLOCK();
 	if ((hook == NULL) || NG_HOOK_NOT_VALID(hook) ||
 	    NG_HOOK_NOT_VALID(peer = NG_HOOK_PEER(hook)) ||
 	    NG_NODE_NOT_VALID(peernode = NG_PEER_NODE(hook))) {
 		NG_FREE_ITEM(item);
 		TRAP_ERROR();
 		NET_EPOCH_EXIT(et);
+		// TOPOLOGY_RUNLOCK();
 		return (ENETDOWN);
 	}
 
@@ -3660,6 +3666,7 @@ ng_address_hook(node_p here, item_p item, hook_p hook, ng_ID_t retaddr)
 	SET_RETADDR(item, here, retaddr);
 
 	NET_EPOCH_EXIT(et);
+	// TOPOLOGY_RUNLOCK();
 
 	return (0);
 }
