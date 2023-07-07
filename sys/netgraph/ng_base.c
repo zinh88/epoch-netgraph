@@ -1161,21 +1161,25 @@ ng_add_hook(node_p node, const char *name, hook_p *hookp)
 hook_p
 ng_findhook(node_p node, const char *name)
 {
-	hook_p hook;
+	hook_p hookptr;
+	hook_p hook = NULL;
 	struct epoch_tracker et;
 
 	if (node->nd_type->findhook != NULL)
 		return (*node->nd_type->findhook)(node, name);
 
 	NET_EPOCH_ENTER(et);
-	CK_LIST_FOREACH(hook, &node->nd_hooks, hk_hooks) {
-		if (NG_HOOK_IS_VALID(hook) &&
-		    (strcmp(NG_HOOK_NAME(hook), name) == 0))
-			NET_EPOCH_EXIT(et);
-			return (hook);
+	CK_LIST_FOREACH(hookptr, &node->nd_hooks, hk_hooks) {
+		if (NG_HOOK_IS_VALID(hookptr) &&
+		    (strcmp(NG_HOOK_NAME(hookptr), name) == 0))
+			{
+				hook = hookptr;
+				break;
+			// return (hook);
+			}
 	}
 	NET_EPOCH_EXIT(et);
-	return (NULL);
+	return (hook);
 }
 
 /*
@@ -1250,11 +1254,11 @@ ng_destroy_hook(hook_p hook)
 	if (node == &ng_deadnode) { /* happens if called from ng_con_nodes() */
 		return;
 	}
-	// mtx_lock(&node->node_mtx);
+	mtx_lock(&node->node_mtx);
 	CK_LIST_REMOVE(hook, hk_hooks);
-	//mtx_unlock(&node->node_mtx);
-
 	node->nd_numhooks--;
+	mtx_unlock(&node->node_mtx);
+
 	if (node->nd_type->disconnect) {
 		/*
 		 * The type handler may elect to destroy the node so don't
@@ -1772,6 +1776,7 @@ ng_path2noderef(node_p here, const char *address, node_p *destp,
 	char    fullpath[NG_PATHSIZ];
 	char   *nodename, *path;
 	node_p  node, oldnode;
+	struct epoch_tracker et;
 
 	/* Initialize */
 	if (destp == NULL) {
@@ -1844,14 +1849,16 @@ ng_path2noderef(node_p here, const char *address, node_p *destp,
 		/* We have a segment, so look for a hook by that name */
 		hook = ng_findhook(node, segment);
 
-		TOPOLOGY_WLOCK();
+		// TOPOLOGY_WLOCK();
+		NET_EPOCH_ENTER(et);
 		/* Can't get there from here... */
 		if (hook == NULL || NG_HOOK_PEER(hook) == NULL ||
 		    NG_HOOK_NOT_VALID(hook) ||
 		    NG_HOOK_NOT_VALID(NG_HOOK_PEER(hook))) {
 			TRAP_ERROR();
 			NG_NODE_UNREF(node);
-			TOPOLOGY_WUNLOCK();
+			// TOPOLOGY_WUNLOCK();
+			NET_EPOCH_EXIT(et);
 			return (ENOENT);
 		}
 
@@ -1868,7 +1875,8 @@ ng_path2noderef(node_p here, const char *address, node_p *destp,
 		NG_NODE_UNREF(oldnode);	/* XXX another race */
 		if (NG_NODE_NOT_VALID(node)) {
 			NG_NODE_UNREF(node);	/* XXX more races */
-			TOPOLOGY_WUNLOCK();
+			// TOPOLOGY_WUNLOCK();
+			NET_EPOCH_EXIT(et);
 			TRAP_ERROR();
 			return (ENXIO);
 		}
@@ -1881,11 +1889,13 @@ ng_path2noderef(node_p here, const char *address, node_p *destp,
 				} else
 					*lasthook = NULL;
 			}
-			TOPOLOGY_WUNLOCK();
+			// TOPOLOGY_WUNLOCK();
+			NET_EPOCH_EXIT(et);
 			*destp = node;
 			return (0);
 		}
-		TOPOLOGY_WUNLOCK();
+		// TOPOLOGY_WUNLOCK();
+		NET_EPOCH_EXIT(et);
 	}
 }
 
@@ -2349,10 +2359,10 @@ ng_snd_item(item_p item, int flags)
 	 * We already decided how we will be queueud or treated.
 	 * Try get the appropriate operating permission.
 	 */
- 	if (rw == NGQRW_R)
-		item = ng_acquire_read(node, item);
-	else
-		item = ng_acquire_write(node, item);
+ 	// if (rw == NGQRW_R)
+	// 	item = ng_acquire_read(node, item);
+	// else
+	// 	item = ng_acquire_write(node, item);
 
 	/* Item was queued while trying to get permission. */
 	if (item == NULL)
@@ -2530,10 +2540,10 @@ ng_apply_item(node_p node, item_p item, int rw)
 	if (hook)
 		NG_HOOK_UNREF(hook);
 
- 	if (rw == NGQRW_R)
-		ng_leave_read(node);
-	else
-		ng_leave_write(node);
+ 	// if (rw == NGQRW_R)
+	// 	ng_leave_read(node);
+	// else
+	// 	ng_leave_write(node);
 
 	/* Apply callback. */
 	if (apply != NULL) {
@@ -3637,7 +3647,7 @@ ng_address_hook(node_p here, item_p item, hook_p hook, ng_ID_t retaddr)
 	hook_p peer;
 	node_p peernode;
 	ITEM_DEBUG_CHECKS;
-	// struct epoch_tracker et;
+	struct epoch_tracker et;
 	/*
 	 * Quick sanity check..
 	 * Since a hook holds a reference on its node, once we know
