@@ -131,7 +131,7 @@ struct ng_hook {
 #define HK_MAGIC 0x78573011
 	int	hk_magic;
 	char	*lastfile;
-	int	lastline;
+	int	lastline;  /* test */
 	CK_SLIST_ENTRY(ng_hook)	  hk_all;		/* all existing items */
 #endif	/* NETGRAPH_DEBUG */ /*----------------------------------------------*/
 };
