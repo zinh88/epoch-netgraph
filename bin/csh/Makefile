@@ -1,6 +1,3 @@
-# $FreeBSD$
-#	@(#)Makefile	8.1 (Berkeley) 5/31/93
-#
 # C Shell with process control; VM/UNIX VAX Makefile
 # Bill Joy UC Berkeley; Jim Kulp IIASA, Austria
 #
@@ -16,6 +13,7 @@ ROOTPACKAGE=	csh
 ETC=	csh.cshrc csh.login csh.logout
 ROOT=	dot.cshrc dot.login
 ROOTDIR=	/root
+ROOTDIR_MODE=	0750
 ROOTNAME_dot.cshrc=	.cshrc
 ROOTNAME_dot.login=	.login
 TCSHDIR= ${SRCTOP}/contrib/tcsh
@@ -125,7 +123,7 @@ tc.defs.c: gethost
 DEPENDOBJS+= gethost
 gethost: gethost.c sh.err.h tc.const.h sh.h ${BUILD_TOOLS_META}
 	@rm -f ${.TARGET}
-	${CC:N${CCACHE_BIN}} -o gethost ${LDFLAGS} ${CFLAGS:C/-DHAVE_ICONV//} \
+	${HOST_CC:N${CCACHE_BIN}} -o gethost ${LDFLAGS} ${CFLAGS:C/-DHAVE_ICONV//} \
 	    ${TCSHDIR}/gethost.c
 .endif
 

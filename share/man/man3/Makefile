@@ -1,5 +1,3 @@
-#	@(#)Makefile	8.2 (Berkeley) 12/13/93
-# $FreeBSD$
 
 .include <src.opts.mk>
 
@@ -30,6 +28,7 @@ MAN=		arb.3 \
 		snl.3 \
 		stats.3 \
 		stdarg.3 \
+		stdckdint.3 \
 		sysexits.3 \
 		tgmath.3 \
 		timeradd.3 \
@@ -216,6 +215,7 @@ MLINKS+=	queue.3 LIST_CLASS_ENTRY.3 \
 		queue.3 LIST_NEXT.3 \
 		queue.3 LIST_PREV.3 \
 		queue.3 LIST_REMOVE.3 \
+		queue.3 LIST_REPLACE.3 \
 		queue.3 LIST_SWAP.3 \
 		queue.3 SLIST_CLASS_ENTRY.3 \
 		queue.3 SLIST_CLASS_HEAD.3 \
@@ -284,6 +284,7 @@ MLINKS+=	queue.3 LIST_CLASS_ENTRY.3 \
 		queue.3 TAILQ_NEXT.3 \
 		queue.3 TAILQ_PREV.3 \
 		queue.3 TAILQ_REMOVE.3 \
+		queue.3 TAILQ_REPLACE.3 \
 		queue.3 TAILQ_SWAP.3
 MLINKS+=	stats.3 stats_tpl_alloc.3 \
 		stats.3 stats_tpl_fetch_allocid.3 \
@@ -311,6 +312,9 @@ MLINKS+=	stdarg.3 va_arg.3 \
 		stdarg.3 va_end.3 \
 		stdarg.3 varargs.3 \
 		stdarg.3 va_start.3
+MLINKS+=	stdckdint.3 ckd_add.3 \
+		stdckdint.3 ckd_sub.3 \
+		stdckdint.3 ckd_mul.3
 MLINKS+=	timeradd.3 timerclear.3 \
 		timeradd.3 timercmp.3 \
 		timeradd.3 timerisset.3 \

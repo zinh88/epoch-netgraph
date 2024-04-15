@@ -30,8 +30,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)uipc_socket.c	8.3 (Berkeley) 4/15/94
  */
 
 /*
@@ -97,17 +95,16 @@
  *
  * NOTE: With regard to VNETs the general rule is that callers do not set
  * curvnet. Exceptions to this rule include soabort(), sodisconnect(),
- * sofree() (and with that sorele(), sotryfree()), as well as sonewconn()
- * and sorflush(), which are usually called from a pre-set VNET context.
- * sopoll() currently does not need a VNET context to be set.
+ * sofree(), sorele(), sonewconn() and sorflush(), which are usually called
+ * from a pre-set VNET context.  sopoll() currently does not need a VNET
+ * context to be set.
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_inet.h"
 #include "opt_inet6.h"
 #include "opt_kern_tls.h"
+#include "opt_ktrace.h"
 #include "opt_sctp.h"
 
 #include <sys/param.h>
@@ -368,8 +365,8 @@ sysctl_maxsockets(SYSCTL_HANDLER_ARGS)
 	return (error);
 }
 SYSCTL_PROC(_kern_ipc, OID_AUTO, maxsockets,
-    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE, &maxsockets, 0,
-    sysctl_maxsockets, "IU",
+    CTLTYPE_INT | CTLFLAG_RWTUN | CTLFLAG_NOFETCH | CTLFLAG_MPSAFE,
+    &maxsockets, 0, sysctl_maxsockets, "IU",
     "Maximum number of sockets available");
 
 /*
@@ -526,8 +523,12 @@ socreate(int dom, struct socket **aso, int type, int proto,
 
 	MPASS(prp->pr_attach);
 
-	if (IN_CAPABILITY_MODE(td) && (prp->pr_flags & PR_CAPATTACH) == 0)
-		return (ECAPMODE);
+	if ((prp->pr_flags & PR_CAPATTACH) == 0) {
+		if (CAP_TRACING(td))
+			ktrcapfail(CAPFAIL_PROTO, &proto);
+		if (IN_CAPABILITY_MODE(td))
+			return (ECAPMODE);
+	}
 
 	if (prison_check_af(cred, prp->pr_domain->dom_family) != 0)
 		return (EPROTONOSUPPORT);
@@ -750,12 +751,31 @@ solisten_clone(struct socket *head)
 	}
 	so->so_listen = head;
 	so->so_type = head->so_type;
-	so->so_options = head->so_options & ~SO_ACCEPTCONN;
+	/*
+	 * POSIX is ambiguous on what options an accept(2)ed socket should
+	 * inherit from the listener.  Words "create a new socket" may be
+	 * interpreted as not inheriting anything.  Best programming practice
+	 * for application developers is to not rely on such inheritance.
+	 * FreeBSD had historically inherited all so_options excluding
+	 * SO_ACCEPTCONN, which virtually means all SOL_SOCKET level options,
+	 * including those completely irrelevant to a new born socket.  For
+	 * compatibility with older versions we will inherit a list of
+	 * meaningful options.
+	 */
+	so->so_options = head->so_options & (SO_KEEPALIVE | SO_DONTROUTE |
+	    SO_LINGER | SO_OOBINLINE | SO_NOSIGPIPE);
 	so->so_linger = head->so_linger;
 	so->so_state = head->so_state;
 	so->so_fibnum = head->so_fibnum;
 	so->so_proto = head->so_proto;
 	so->so_cred = crhold(head->so_cred);
+	if (V_socket_hhh[HHOOK_SOCKET_NEWCONN]->hhh_nhooks > 0) {
+		if (hhook_run_socket(so, head, HHOOK_SOCKET_NEWCONN)) {
+			sodealloc(so);
+			log(LOG_DEBUG, "%s: hhook run failed\n", __func__);
+			return (NULL);
+		}
+	}
 #ifdef MAC
 	mac_socket_newconn(head, so);
 #endif
@@ -784,7 +804,7 @@ solisten_clone(struct socket *head)
 	return (so);
 }
 
-/* Connstatus may be 0, or SS_ISCONFIRMING, or SS_ISCONNECTED. */
+/* Connstatus may be 0 or SS_ISCONNECTED. */
 struct socket *
 sonewconn(struct socket *head, int connstatus)
 {
@@ -914,6 +934,10 @@ sopeeloff(struct socket *head)
 	so->so_snd.sb_timeo = head->so_snd.sb_timeo;
 	so->so_rcv.sb_flags |= head->so_rcv.sb_flags & SB_AUTOSIZE;
 	so->so_snd.sb_flags |= head->so_snd.sb_flags & SB_AUTOSIZE;
+	if ((so->so_proto->pr_flags & PR_SOCKBUF) == 0) {
+		so->so_snd.sb_mtx = &so->so_snd_mtx;
+		so->so_rcv.sb_mtx = &so->so_rcv_mtx;
+	}
 
 	soref(so);
 
@@ -1055,8 +1079,10 @@ solisten_proto(struct socket *so, int backlog)
 	sbrcv_timeo = so->so_rcv.sb_timeo;
 	sbsnd_timeo = so->so_snd.sb_timeo;
 
-	sbdestroy(so, SO_SND);
-	sbdestroy(so, SO_RCV);
+	if (!(so->so_proto->pr_flags & PR_SOCKBUF)) {
+		sbdestroy(so, SO_SND);
+		sbdestroy(so, SO_RCV);
+	}
 
 #ifdef INVARIANTS
 	bzero(&so->so_rcv,
@@ -1193,10 +1219,6 @@ sofree(struct socket *so)
 		so->so_dtor(so);
 
 	VNET_SO_ASSERT(so);
-	if ((pr->pr_flags & PR_RIGHTS) && !SOLISTENING(so)) {
-		MPASS(pr->pr_domain->dom_dispose != NULL);
-		(*pr->pr_domain->dom_dispose)(so);
-	}
 	if (pr->pr_detach != NULL)
 		pr->pr_detach(so);
 
@@ -1340,13 +1362,52 @@ soabort(struct socket *so)
 }
 
 int
-soaccept(struct socket *so, struct sockaddr **nam)
+soaccept(struct socket *so, struct sockaddr *sa)
 {
+#ifdef INVARIANTS
+	u_char len = sa->sa_len;
+#endif
 	int error;
 
 	CURVNET_SET(so->so_vnet);
-	error = so->so_proto->pr_accept(so, nam);
+	error = so->so_proto->pr_accept(so, sa);
+	KASSERT(sa->sa_len <= len,
+	    ("%s: protocol %p sockaddr overflow", __func__, so->so_proto));
 	CURVNET_RESTORE();
+	return (error);
+}
+
+int
+sopeeraddr(struct socket *so, struct sockaddr *sa)
+{
+#ifdef INVARIANTS
+	u_char len = sa->sa_len;
+#endif
+	int error;
+
+	CURVNET_SET(so->so_vnet);
+	error = so->so_proto->pr_peeraddr(so, sa);
+	KASSERT(sa->sa_len <= len,
+	    ("%s: protocol %p sockaddr overflow", __func__, so->so_proto));
+	CURVNET_RESTORE();
+
+	return (error);
+}
+
+int
+sosockaddr(struct socket *so, struct sockaddr *sa)
+{
+#ifdef INVARIANTS
+	u_char len = sa->sa_len;
+#endif
+	int error;
+
+	CURVNET_SET(so->so_vnet);
+	error = so->so_proto->pr_sockaddr(so, sa);
+	KASSERT(sa->sa_len <= len,
+	    ("%s: protocol %p sockaddr overflow", __func__, so->so_proto));
+	CURVNET_RESTORE();
+
 	return (error);
 }
 
@@ -1473,8 +1534,7 @@ sosend_dgram(struct socket *so, struct sockaddr *addr, struct uio *uio,
 		 */
 		if ((so->so_proto->pr_flags & PR_CONNREQUIRED) &&
 		    (so->so_proto->pr_flags & PR_IMPLOPCL) == 0) {
-			if ((so->so_state & SS_ISCONFIRMING) == 0 &&
-			    !(resid == 0 && clen != 0)) {
+			if (!(resid == 0 && clen != 0)) {
 				SOCKBUF_UNLOCK(&so->so_snd);
 				error = ENOTCONN;
 				goto out;
@@ -1682,8 +1742,7 @@ restart:
 			 */
 			if ((so->so_proto->pr_flags & PR_CONNREQUIRED) &&
 			    (so->so_proto->pr_flags & PR_IMPLOPCL) == 0) {
-				if ((so->so_state & SS_ISCONFIRMING) == 0 &&
-				    !(resid == 0 && clen != 0)) {
+				if (!(resid == 0 && clen != 0)) {
 					SOCKBUF_UNLOCK(&so->so_snd);
 					error = ENOTCONN;
 					goto release;
@@ -2025,11 +2084,6 @@ soreceive_generic(struct socket *so, struct sockaddr **psa, struct uio *uio,
 		return (soreceive_rcvoob(so, uio, flags));
 	if (mp != NULL)
 		*mp = NULL;
-	if ((pr->pr_flags & PR_WANTRCVD) && (so->so_state & SS_ISCONFIRMING)
-	    && uio->uio_resid) {
-		VNET_SO_ASSERT(so);
-		pr->pr_rcvd(so, 0);
-	}
 
 	error = SOCK_IO_RECV_LOCK(so, SBLOCKWAIT(flags));
 	if (error)
@@ -2419,6 +2473,10 @@ dontblock:
 				VNET_SO_ASSERT(so);
 				pr->pr_rcvd(so, flags);
 				SOCKBUF_LOCK(&so->so_rcv);
+				if (__predict_false(so->so_rcv.sb_mb == NULL &&
+				    (so->so_error || so->so_rerror ||
+				    so->so_rcv.sb_state & SBS_CANTRCVMORE)))
+					break;
 			}
 			SBLASTRECORDCHK(&so->so_rcv);
 			SBLASTMBUFCHK(&so->so_rcv);
@@ -2827,13 +2885,10 @@ soreceive_dgram(struct socket *so, struct sockaddr **psa, struct uio *uio,
 		    ("m->m_type == %d", m->m_type));
 		if (psa != NULL)
 			*psa = sodupsockaddr(mtod(m, struct sockaddr *),
-			    M_NOWAIT);
+			    M_WAITOK);
 		m = m_free(m);
 	}
-	if (m == NULL) {
-		/* XXXRW: Can this happen? */
-		return (0);
-	}
+	KASSERT(m, ("%s: no data or control after soname", __func__));
 
 	/*
 	 * Packet to copyout() is now in 'm' and it is disconnected from the
@@ -2913,68 +2968,23 @@ soreceive(struct socket *so, struct sockaddr **psa, struct uio *uio,
 }
 
 int
-soshutdown(struct socket *so, int how)
+soshutdown(struct socket *so, enum shutdown_how how)
 {
-	struct protosw *pr;
-	int error, soerror_enotconn;
-
-	if (!(how == SHUT_RD || how == SHUT_WR || how == SHUT_RDWR))
-		return (EINVAL);
-
-	soerror_enotconn = 0;
-	SOCK_LOCK(so);
-	if ((so->so_state &
-	    (SS_ISCONNECTED | SS_ISCONNECTING | SS_ISDISCONNECTING)) == 0) {
-		/*
-		 * POSIX mandates us to return ENOTCONN when shutdown(2) is
-		 * invoked on a datagram sockets, however historically we would
-		 * actually tear socket down. This is known to be leveraged by
-		 * some applications to unblock process waiting in recvXXX(2)
-		 * by other process that it shares that socket with. Try to meet
-		 * both backward-compatibility and POSIX requirements by forcing
-		 * ENOTCONN but still asking protocol to perform pru_shutdown().
-		 */
-		if (so->so_type != SOCK_DGRAM && !SOLISTENING(so)) {
-			SOCK_UNLOCK(so);
-			return (ENOTCONN);
-		}
-		soerror_enotconn = 1;
-	}
-
-	if (SOLISTENING(so)) {
-		if (how != SHUT_WR) {
-			so->so_error = ECONNABORTED;
-			solisten_wakeup(so);	/* unlocks so */
-		} else {
-			SOCK_UNLOCK(so);
-		}
-		goto done;
-	}
-	SOCK_UNLOCK(so);
+	int error;
 
 	CURVNET_SET(so->so_vnet);
-	pr = so->so_proto;
-	if (pr->pr_flush != NULL)
-		pr->pr_flush(so, how);
-	if (how != SHUT_WR)
-		sorflush(so);
-	if (how != SHUT_RD) {
-		error = pr->pr_shutdown(so);
-		wakeup(&so->so_timeo);
-		CURVNET_RESTORE();
-		return ((error == 0 && soerror_enotconn) ? ENOTCONN : error);
-	}
-	wakeup(&so->so_timeo);
+	error = so->so_proto->pr_shutdown(so, how);
 	CURVNET_RESTORE();
 
-done:
-	return (soerror_enotconn ? ENOTCONN : 0);
+	return (error);
 }
 
+/*
+ * Used by several pr_shutdown implementations that use generic socket buffers.
+ */
 void
 sorflush(struct socket *so)
 {
-	struct protosw *pr;
 	int error;
 
 	VNET_SO_ASSERT(so);
@@ -2984,6 +2994,12 @@ sorflush(struct socket *so)
 	 * a lock against other simultaneous readers before clearing the
 	 * socket buffer.  Don't let our acquire be interrupted by a signal
 	 * despite any existing socket disposition on interruptable waiting.
+	 *
+	 * The SOCK_IO_RECV_LOCK() is important here as there some pr_soreceive
+	 * methods that read the top of the socket buffer without acquisition
+	 * of the socket buffer mutex, assuming that top of the buffer
+	 * exclusively belongs to the read(2) syscall.  This is handy when
+	 * performing MSG_PEEK.
 	 */
 	socantrcvmore(so);
 
@@ -2994,14 +3010,8 @@ sorflush(struct socket *so)
 		return;
 	}
 
-	pr = so->so_proto;
-	if (pr->pr_flags & PR_RIGHTS) {
-		MPASS(pr->pr_domain->dom_dispose != NULL);
-		(*pr->pr_domain->dom_dispose)(so);
-	} else {
-		sbrelease(so, SO_RCV);
-		SOCK_IO_RECV_UNLOCK(so);
-	}
+	sbrelease(so, SO_RCV);
+	SOCK_IO_RECV_UNLOCK(so);
 
 }
 
@@ -3428,7 +3438,7 @@ integer:
 			    so, &extmac);
 			if (error)
 				goto bad;
-			error = sooptcopyout(sopt, &extmac, sizeof extmac);
+			/* Don't copy out extmac, it is unchanged. */
 #else
 			error = EOPNOTSUPP;
 #endif
@@ -3444,7 +3454,7 @@ integer:
 			    sopt->sopt_td->td_ucred, so, &extmac);
 			if (error)
 				goto bad;
-			error = sooptcopyout(sopt, &extmac, sizeof extmac);
+			/* Don't copy out extmac, it is unchanged. */
 #else
 			error = EOPNOTSUPP;
 #endif
@@ -3896,7 +3906,7 @@ soisconnected(struct socket *so)
 	bool last __diagused;
 
 	SOCK_LOCK(so);
-	so->so_state &= ~(SS_ISCONNECTING|SS_ISDISCONNECTING|SS_ISCONFIRMING);
+	so->so_state &= ~(SS_ISCONNECTING|SS_ISDISCONNECTING);
 	so->so_state |= SS_ISCONNECTED;
 
 	if (so->so_qstate == SQ_INCOMP) {
@@ -4257,34 +4267,6 @@ sotoxsocket(struct socket *so, struct xsocket *xso)
 	}
 }
 
-struct sockbuf *
-so_sockbuf_rcv(struct socket *so)
-{
-
-	return (&so->so_rcv);
-}
-
-struct sockbuf *
-so_sockbuf_snd(struct socket *so)
-{
-
-	return (&so->so_snd);
-}
-
-int
-so_state_get(const struct socket *so)
-{
-
-	return (so->so_state);
-}
-
-void
-so_state_set(struct socket *so, int val)
-{
-
-	so->so_state = val;
-}
-
 int
 so_options_get(const struct socket *so)
 {
@@ -4311,77 +4293,4 @@ so_error_set(struct socket *so, int val)
 {
 
 	so->so_error = val;
-}
-
-int
-so_linger_get(const struct socket *so)
-{
-
-	return (so->so_linger);
-}
-
-void
-so_linger_set(struct socket *so, int val)
-{
-
-	KASSERT(val >= 0 && val <= USHRT_MAX && val <= (INT_MAX / hz),
-	    ("%s: val %d out of range", __func__, val));
-
-	so->so_linger = val;
-}
-
-struct protosw *
-so_protosw_get(const struct socket *so)
-{
-
-	return (so->so_proto);
-}
-
-void
-so_protosw_set(struct socket *so, struct protosw *val)
-{
-
-	so->so_proto = val;
-}
-
-void
-so_sorwakeup(struct socket *so)
-{
-
-	sorwakeup(so);
-}
-
-void
-so_sowwakeup(struct socket *so)
-{
-
-	sowwakeup(so);
-}
-
-void
-so_sorwakeup_locked(struct socket *so)
-{
-
-	sorwakeup_locked(so);
-}
-
-void
-so_sowwakeup_locked(struct socket *so)
-{
-
-	sowwakeup_locked(so);
-}
-
-void
-so_lock(struct socket *so)
-{
-
-	SOCK_LOCK(so);
-}
-
-void
-so_unlock(struct socket *so)
-{
-
-	SOCK_UNLOCK(so);
 }

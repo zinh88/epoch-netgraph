@@ -38,14 +38,6 @@
  * SUCH DAMAGE.
  */
 
-#if 0
-#ifndef lint
-static char sccsid[] = "@(#)mkfs.c	8.11 (Berkeley) 5/3/95";
-#endif /* not lint */
-#endif
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #define _WANT_P_OSREL
 #include <sys/param.h>
 #include <sys/disklabel.h>
@@ -1230,7 +1222,7 @@ ilog2(int val)
 static u_int32_t
 newfs_random(void)
 {
-	static int nextnum = 1;
+	static u_int32_t nextnum = 1;
 
 	if (Rflag)
 		return (nextnum++);

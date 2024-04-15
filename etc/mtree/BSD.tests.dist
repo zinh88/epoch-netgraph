@@ -1,10 +1,21 @@
-# $FreeBSD$
 #
 # Please see the file src/etc/mtree/README before making changes to this file.
 #
 
 /set type=dir uname=root gname=wheel mode=0755 tags=package=tests
 .
+    atf_python
+        sys
+            net
+            ..
+            netlink
+            ..
+            netpfil
+                ipfw
+                ..
+            ..
+        ..
+    ..
     bin
         cat
         ..
@@ -21,6 +32,8 @@
         echo
         ..
         expr
+        ..
+        hostname
         ..
         ln
         ..
@@ -109,9 +122,9 @@
                     ..
                     end
                     ..
-                    env
-                    ..
                     enum
+                    ..
+                    env
                     ..
                     error
                     ..
@@ -135,6 +148,8 @@
                     ..
                     json
                     ..
+                    kinst
+                    ..
                     lexer
                     ..
                     llquantize
@@ -148,6 +163,8 @@
                     multiaggs
                     ..
                     offsetof
+                    ..
+                    oformat
                     ..
                     operators
                     ..
@@ -255,8 +272,6 @@
                 amd64
                     arrays
                     ..
-                    kinst
-                    ..
                 ..
             ..
             zfsd
@@ -279,6 +294,8 @@
             ..
         ..
     ..
+    include
+    ..
     lib
         atf
             libatf-c
@@ -297,6 +314,8 @@
             ..
             dynamiclib
             ..
+            dynamicpie
+            ..
             static
             ..
         ..
@@ -313,6 +332,8 @@
         libarchive
         ..
         libbe
+        ..
+        libbsnmp
         ..
         libc
             c063
@@ -351,9 +372,9 @@
             ..
             rpc
             ..
-            ssp
-            ..
             setjmp
+            ..
+            ssp
             ..
             stdio
             ..
@@ -363,13 +384,13 @@
             ..
             sys
             ..
+            termios
+            ..
             time
             ..
             tls
                 dso
                 ..
-            ..
-            termios
             ..
             ttyio
             ..
@@ -380,7 +401,13 @@
             services
                 cap_dns
                 ..
+                cap_fileargs
+                ..
                 cap_grp
+                ..
+                cap_net
+                ..
+                cap_netdb
                 ..
                 cap_pwd
                 ..
@@ -432,9 +459,13 @@
             atf-sh
             ..
         ..
+        nuageinit
+        ..
         rc
         ..
         rtld-elf
+            rtld_deepbind
+            ..
         ..
         tftpd
         ..
@@ -442,13 +473,15 @@
     sbin
         bectl
         ..
-        dhclient
-        ..
         devd
+        ..
+        dhclient
         ..
         growfs
         ..
         ifconfig
+        ..
+        ipfw
         ..
         md5
         ..
@@ -532,95 +565,95 @@
                     clean_mirror
                     ..
                     cli_root
-                        zfs_upgrade
-                        ..
-                        zfs_promote
-                        ..
-                        zfs_clone
-                        ..
-                        zfs_property
-                        ..
-                        zfs_destroy
-                        ..
-                        zpool_create
-                        ..
-                        zpool_history
-                        ..
-                        zpool_expand
-                        ..
-                        zpool_remove
-                        ..
-                        zfs_mount
-                        ..
-                        zfs_unshare
-                        ..
                         zdb
-                        ..
-                        zpool_online
-                        ..
-                        zpool_get
-                        ..
-                        zpool_export
-                        ..
-                        zfs_copies
-                        ..
-                        zfs_get
                         ..
                         zfs
                         ..
-                        zpool_clear
+                        zfs_clone
                         ..
-                        zpool_import
-                            blockfiles
-                            ..
+                        zfs_copies
                         ..
-                        zpool
+                        zfs_create
                         ..
-                        zpool_offline
+                        zfs_destroy
                         ..
-                        zpool_replace
+                        zfs_diff
+                        ..
+                        zfs_get
+                        ..
+                        zfs_inherit
+                        ..
+                        zfs_mount
+                        ..
+                        zfs_promote
+                        ..
+                        zfs_property
+                        ..
+                        zfs_receive
+                        ..
+                        zfs_rename
+                        ..
+                        zfs_reservation
                         ..
                         zfs_rollback
-                        ..
-                        zpool_set
                         ..
                         zfs_send
                         ..
                         zfs_set
                         ..
-                        zpool_detach
-                        ..
-                        zfs_diff
-                        ..
-                        zpool_scrub
-                        ..
-                        zfs_inherit
+                        zfs_share
                         ..
                         zfs_snapshot
                         ..
-                        zfs_share
+                        zfs_unmount
+                        ..
+                        zfs_unshare
+                        ..
+                        zfs_upgrade
+                        ..
+                        zpool
+                        ..
+                        zpool_add
+                        ..
+                        zpool_attach
+                        ..
+                        zpool_clear
+                        ..
+                        zpool_create
                         ..
                         zpool_destroy
                         ..
+                        zpool_detach
+                        ..
+                        zpool_expand
+                        ..
+                        zpool_export
+                        ..
+                        zpool_get
+                        ..
+                        zpool_history
+                        ..
+                        zpool_import
+                            blockfiles
+                            ..
+                        ..
+                        zpool_offline
+                        ..
+                        zpool_online
+                        ..
+                        zpool_remove
+                        ..
+                        zpool_replace
+                        ..
+                        zpool_scrub
+                        ..
+                        zpool_set
+                        ..
                         zpool_status
-                        ..
-                        zfs_unmount
-                        ..
-                        zfs_receive
-                        ..
-                        zfs_create
                         ..
                         zpool_upgrade
                             blockfiles
                             ..
-                        ..
-                        zpool_add
-                        ..
-                        zfs_rename
-                        ..
-                        zpool_attach
-                        ..
-                        zfs_reservation
                         ..
                     ..
                     cli_user
@@ -750,6 +783,8 @@
                 ..
             ..
         ..
+        common
+        ..
         compat32
         ..
         devrandom
@@ -792,6 +827,8 @@
                 ..
                 stripe
                 ..
+                union
+                ..
                 uzip
                     etalon
                     ..
@@ -813,6 +850,8 @@
         mac
             bsdextended
             ..
+            ipacl
+            ..
             portacl
             ..
         ..
@@ -820,6 +859,8 @@
         ..
         net
             if_ovpn
+                ccd
+                ..
             ..
             routing
             ..
@@ -827,6 +868,8 @@
         netgraph
         ..
         netinet
+            libalias
+            ..
         ..
         netinet6
             frag6
@@ -888,17 +931,23 @@
         ..
         posixshm
         ..
+        ses
+        ..
         sys
         ..
         vfs
         ..
         vm
+            stack
+            ..
         ..
         vmm
         ..
     ..
     usr.bin
         apply
+        ..
+        asa
         ..
         awk
             bugs-fixed
@@ -1014,13 +1063,13 @@
         ..
         cmp
         ..
-        compress
-        ..
-        cpio
-        ..
         col
         ..
         comm
+        ..
+        compress
+        ..
+        cpio
         ..
         csplit
         ..
@@ -1038,9 +1087,9 @@
         ..
         factor
         ..
-        file2c
-        ..
         file
+        ..
+        file2c
         ..
         find
         ..
@@ -1049,6 +1098,22 @@
         getconf
         ..
         gh-bc
+            scripts
+            ..
+            tests
+                bc
+                    errors
+                    ..
+                    scripts
+                    ..
+                ..
+                dc
+                    errors
+                    ..
+                    scripts
+                    ..
+                ..
+            ..
         ..
         grep
         ..
@@ -1072,6 +1137,10 @@
         ..
         locale
         ..
+        lockf
+        ..
+        lorder
+        ..
         m4
         ..
         mkimg
@@ -1085,6 +1154,8 @@
         patch
         ..
         pr
+        ..
+        printenv
         ..
         printf
         ..
@@ -1116,6 +1187,8 @@
         ..
         tftp
         ..
+        touch
+        ..
         tr
         ..
         truncate
@@ -1127,6 +1200,8 @@
         unifdef
         ..
         uniq
+        ..
+        unzip
         ..
         vmstat
         ..
@@ -1158,8 +1233,6 @@
         ..
         makefs
         ..
-        mixer
-        ..
         newsyslog
         ..
         nmtree
@@ -1171,6 +1244,8 @@
         rpcbind
         ..
         sa
+        ..
+        syslogd
         ..
     ..
 ..

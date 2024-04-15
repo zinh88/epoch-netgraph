@@ -26,9 +26,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/types.h>
 #include <sys/param.h>
 #include <sys/module.h>
@@ -1086,11 +1083,6 @@ pmc_allocate(const char *ctrspec, enum pmc_mode mode,
 	if (pmc_pmu_enabled()) {
 		if (pmc_pmu_pmcallocate(ctrname, &pmc_config) == 0)
 			goto found;
-
-		/* Otherwise, reset any changes */
-		pmc_config.pm_ev = 0;
-		pmc_config.pm_caps = 0;
-		pmc_config.pm_class = 0;
 	}
 	free(spec_copy);
 	spec_copy = NULL;

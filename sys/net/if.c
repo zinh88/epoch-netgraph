@@ -28,9 +28,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)if.c	8.5 (Berkeley) 1/9/95
- * $FreeBSD$
  */
 
 #include "opt_bpf.h"
@@ -82,6 +79,7 @@
 #include <net/if_arp.h>
 #include <net/if_clone.h>
 #include <net/if_dl.h>
+#include <net/if_strings.h>
 #include <net/if_types.h>
 #include <net/if_var.h>
 #include <net/if_media.h>
@@ -1127,6 +1125,8 @@ if_detach_internal(struct ifnet *ifp, bool vmove)
 
 	shutdown = VNET_IS_SHUTTING_DOWN(ifp->if_vnet);
 #endif
+
+	sx_assert(&ifnet_detach_sxlock, SX_XLOCKED);
 
 	/*
 	 * At this point we know the interface still was on the ifnet list
@@ -4326,6 +4326,12 @@ if_getidxgen(const if_t ifp)
 	return (ifp->if_idxgen);
 }
 
+const char *
+if_getdescr(if_t ifp)
+{
+	return (ifp->if_description);
+}
+
 void
 if_setdescr(if_t ifp, char *descrbuf)
 {
@@ -4354,6 +4360,12 @@ int
 if_getalloctype(const if_t ifp)
 {
 	return (ifp->if_alloctype);
+}
+
+void
+if_setlastchange(if_t ifp)
+{
+	getmicrotime(&ifp->if_lastchange);
 }
 
 /*
@@ -4713,6 +4725,38 @@ if_foreach_addr_type(if_t ifp, int type, if_addr_cb_t cb, void *cb_arg)
 	return (count);
 }
 
+struct ifaddr *
+ifa_iter_start(if_t ifp, struct ifa_iter *iter)
+{
+	struct ifaddr *ifa;
+
+	NET_EPOCH_ASSERT();
+
+	bzero(iter, sizeof(*iter));
+	ifa = CK_STAILQ_FIRST(&ifp->if_addrhead);
+	if (ifa != NULL)
+		iter->context[0] = CK_STAILQ_NEXT(ifa, ifa_link);
+	else
+		iter->context[0] = NULL;
+	return (ifa);
+}
+
+struct ifaddr *
+ifa_iter_next(struct ifa_iter *iter)
+{
+	struct ifaddr *ifa = iter->context[0];
+
+	if (ifa != NULL)
+		iter->context[0] = CK_STAILQ_NEXT(ifa, ifa_link);
+	return (ifa);
+}
+
+void
+ifa_iter_finish(struct ifa_iter *iter)
+{
+	/* Nothing to do here for now. */
+}
+
 int
 if_setsoftc(if_t ifp, void *softc)
 {
@@ -4824,6 +4868,12 @@ if_resolvemulti(if_t ifp, struct sockaddr **srcs, struct sockaddr *dst)
 	return (ifp->if_resolvemulti(ifp, srcs, dst));
 }
 
+int
+if_ioctl(if_t ifp, u_long cmd, void *data)
+{
+	return (ifp->if_ioctl(ifp, cmd, data));
+}
+
 struct mbuf *
 if_dequeue(if_t ifp)
 {
@@ -4857,18 +4907,6 @@ void *
 if_gethandle(u_char type)
 {
 	return (if_alloc(type));
-}
-
-void
-if_bpfmtap(if_t ifp, struct mbuf *m)
-{
-	BPF_MTAP(ifp, m);
-}
-
-void
-if_etherbpfmtap(if_t ifp, struct mbuf *m)
-{
-	ETHER_BPF_MTAP(ifp, m);
 }
 
 void

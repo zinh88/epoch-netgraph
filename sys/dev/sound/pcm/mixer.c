@@ -37,8 +37,6 @@
 #include "feeder_if.h"
 #include "mixer_if.h"
 
-SND_DECLARE_FILE("$FreeBSD$");
-
 static MALLOC_DEFINE(M_MIXER, "mixer", "mixer");
 
 static int mixer_bypass = 1;
@@ -818,17 +816,6 @@ mixer_uninit(device_t dev)
 	KASSERT(m != NULL, ("NULL snd_mixer"));
 	KASSERT(m->type == MIXER_TYPE_PRIMARY,
 	    ("%s(): illegal mixer type=%d", __func__, m->type));
-
-	snd_mtxlock(m->lock);
-
-	if (m->busy) {
-		snd_mtxunlock(m->lock);
-		return EBUSY;
-	}
-
-	/* destroy dev can sleep --hps */
-
-	snd_mtxunlock(m->lock);
 
 	pdev->si_drv1 = NULL;
 	destroy_dev(pdev);

@@ -29,8 +29,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_ddb.h"
 #include "opt_inet.h"
 
@@ -568,7 +566,7 @@ debugnet_input_one(struct ifnet *ifp, struct mbuf *m)
 	}
 	if (m->m_len < ETHER_HDR_LEN) {
 		DNETDEBUG_IF(ifp,
-	    "discard frame without leading eth header (len %u pktlen %u)\n",
+	    "discard frame without leading eth header (len %d pktlen %d)\n",
 		    m->m_len, m->m_pkthdr.len);
 		goto done;
 	}

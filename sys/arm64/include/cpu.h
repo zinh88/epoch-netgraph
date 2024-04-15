@@ -32,11 +32,12 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	from: @(#)cpu.h 5.4 (Berkeley) 5/9/91
  *	from: FreeBSD: src/sys/i386/include/cpu.h,v 1.62 2001/06/29
- * $FreeBSD$
  */
+
+#ifdef __arm__
+#include <arm/cpu.h>
+#else /* !__arm__ */
 
 #ifndef _MACHINE_CPU_H_
 #define	_MACHINE_CPU_H_
@@ -131,6 +132,20 @@
 #define	CPU_PART_KRYO400_GOLD	0x804
 #define	CPU_PART_KRYO400_SILVER	0x805
 
+/* Apple part numbers */
+#define CPU_PART_M1_ICESTORM      0x022
+#define CPU_PART_M1_FIRESTORM     0x023
+#define CPU_PART_M1_ICESTORM_PRO  0x024
+#define CPU_PART_M1_FIRESTORM_PRO 0x025
+#define CPU_PART_M1_ICESTORM_MAX  0x028
+#define CPU_PART_M1_FIRESTORM_MAX 0x029
+#define CPU_PART_M2_BLIZZARD      0x032
+#define CPU_PART_M2_AVALANCHE     0x033
+#define CPU_PART_M2_BLIZZARD_PRO  0x034
+#define CPU_PART_M2_AVALANCHE_PRO 0x035
+#define CPU_PART_M2_BLIZZARD_MAX  0x038
+#define CPU_PART_M2_AVALANCHE_MAX 0x039
+
 #define	CPU_IMPL(midr)	(((midr) >> 24) & 0xff)
 #define	CPU_PART(midr)	(((midr) >> 4) & 0xfff)
 #define	CPU_VAR(midr)	(((midr) >> 20) & 0xf)
@@ -191,6 +206,9 @@ extern uint64_t __cpu_affinity[];
 struct arm64_addr_mask;
 extern struct arm64_addr_mask elf64_addr_mask;
 
+typedef void (*cpu_reset_hook_t)(void);
+extern cpu_reset_hook_t cpu_reset_hook;
+
 void	cpu_halt(void) __dead2;
 void	cpu_reset(void) __dead2;
 void	fork_trampoline(void);
@@ -213,6 +231,9 @@ void	ptrauth_mp_start(uint64_t);
 void	update_special_regs(u_int);
 bool	extract_user_id_field(u_int, u_int, uint8_t *);
 bool	get_kernel_reg(u_int, uint64_t *);
+bool	get_kernel_reg_masked(u_int, uint64_t *, uint64_t);
+
+void	cpu_desc_init(void);
 
 #define	CPU_AFFINITY(cpu)	__cpu_affinity[(cpu)]
 #define	CPU_CURRENT_SOCKET				\
@@ -250,3 +271,5 @@ ADDRESS_TRANSLATE_FUNC(s1e1w)
 #endif
 
 #endif /* !_MACHINE_CPU_H_ */
+
+#endif /* !__arm__ */

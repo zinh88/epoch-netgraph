@@ -118,7 +118,7 @@ fi
 authorarg=
 if [ -n "$author" ]; then
 	# Match user ID in the email portion of author or committer
-	authorarg="--author <${author}@ --committer <${author}@"
+	authorarg="--committer <${author}@"
 fi
 
 # Commits in from_branch after branch point
@@ -141,6 +141,9 @@ commits_to()
 canonicalize_hashes()
 {
 	while read hash rest; do
+		case "${hash}" in
+		"#"*)	continue ;;
+		esac
 		if ! git show --pretty=%H --no-patch $hash; then
 			echo "error parsing hash list" >&2
 			exit 1

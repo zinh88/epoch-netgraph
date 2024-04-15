@@ -30,8 +30,6 @@
  * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 #ifndef	_LINUXKPI_LINUX_NETDEVICE_H
 #define	_LINUXKPI_LINUX_NETDEVICE_H
@@ -232,7 +230,7 @@ void linuxkpi_netif_napi_add(struct net_device *, struct napi_struct *,
 void linuxkpi_netif_napi_del(struct napi_struct *);
 bool linuxkpi_napi_schedule_prep(struct napi_struct *);
 void linuxkpi___napi_schedule(struct napi_struct *);
-void linuxkpi_napi_schedule(struct napi_struct *);
+bool linuxkpi_napi_schedule(struct napi_struct *);
 void linuxkpi_napi_reschedule(struct napi_struct *);
 bool linuxkpi_napi_complete_done(struct napi_struct *, int);
 bool linuxkpi_napi_complete(struct napi_struct *);
@@ -272,6 +270,13 @@ netif_napi_add_tx(struct net_device *dev, struct napi_struct *napi,
 {
 
 	netif_napi_add(dev, napi, napi_poll);
+}
+
+static inline bool
+napi_is_scheduled(struct napi_struct *napi)
+{
+
+	return (test_bit(LKPI_NAPI_FLAG_IS_SCHEDULED, &napi->state));
 }
 
 /* -------------------------------------------------------------------------- */

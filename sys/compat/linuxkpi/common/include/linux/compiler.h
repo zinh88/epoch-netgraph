@@ -26,8 +26,6 @@
  * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 #ifndef	_LINUXKPI_LINUX_COMPILER_H_
 #define	_LINUXKPI_LINUX_COMPILER_H_
@@ -111,5 +109,8 @@
 #define	__must_be_array(a)	__same_type(a, &(a)[0])
 
 #define	sizeof_field(_s, _m)	sizeof(((_s *)0)->_m)
+
+#define is_signed_type(t)	((t)-1 < (t)1)
+#define is_unsigned_type(t)	((t)-1 > (t)1)
 
 #endif	/* _LINUXKPI_LINUX_COMPILER_H_ */

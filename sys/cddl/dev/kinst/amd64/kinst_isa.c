@@ -1,8 +1,12 @@
 /*
  * SPDX-License-Identifier: CDDL 1.0
  *
- * Copyright 2022 Christos Margiolis <christos@FreeBSD.org>
- * Copyright 2022 Mark Johnston <markj@FreeBSD.org>
+ * Copyright (c) 2022 Christos Margiolis <christos@FreeBSD.org>
+ * Copyright (c) 2022 Mark Johnston <markj@FreeBSD.org>
+ * Copyright (c) 2023 The FreeBSD Foundation
+ *
+ * Portions of this software were developed by Christos Margiolis
+ * <christos@FreeBSD.org> under sponsorship from the FreeBSD Foundation.
  */
 
 #include <sys/param.h>
@@ -197,7 +201,7 @@ kinst_invop(uintptr_t addr, struct trapframe *frame, uintptr_t scratch)
 		if ((frame->tf_rflags & PSL_I) == 0)
 			tramp = DPCPU_GET(intr_tramp);
 		else
-			tramp = curthread->t_kinst;
+			tramp = curthread->t_kinst_tramp;
 		if (tramp == NULL) {
 			/*
 			 * A trampoline allocation failed, so this probe is
@@ -496,7 +500,8 @@ kinst_make_probe(linker_file_t lf, int symindx, linker_symval_t *symval,
 	dtrace_kinst_probedesc_t *pd;
 	const char *func;
 	int error, instrsize, n, off;
-	uint8_t *instr, *limit;
+	uint8_t *instr, *limit, *tmp;
+	bool push_found;
 
 	pd = opaque;
 	func = symval->name;
@@ -511,12 +516,24 @@ kinst_make_probe(linker_file_t lf, int symindx, linker_symval_t *symval,
 		return (0);
 
 	/*
-	 * Ignore functions not beginning with the usual function prologue.
-	 * These might correspond to exception handlers with which we should not
-	 * meddle.  This does however exclude functions which can be safely
-	 * traced, such as cpu_switch().
+	 * Refuse to instrument functions lacking the usual frame pointer
+	 * manipulations since they might correspond to exception handlers.
 	 */
-	if (*instr != KINST_PUSHL_RBP)
+	tmp = instr;
+	push_found = false;
+	while (tmp < limit) {
+		/*
+		 * Checking for 'pop %rbp' as well makes the filtering too
+		 * strict as it would skip functions that never return (e.g.,
+		 * vnlru_proc()).
+		 */
+		if (*tmp == KINST_PUSHL_RBP) {
+			push_found = true;
+			break;
+		}
+		tmp += dtrace_instr_size(tmp);
+	}
+	if (!push_found)
 		return (0);
 
 	n = 0;

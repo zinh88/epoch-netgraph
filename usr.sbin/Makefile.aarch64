@@ -1,6 +1,6 @@
-# $FreeBSD$
-
 .if ${MK_ACPI} != "no"
 SUBDIR+=	acpi
 .endif
-SUBDIR+=	ofwdump
+.if ${MK_BHYVE} != "no"
+SUBDIR+=	bhyve
+.endif

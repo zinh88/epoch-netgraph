@@ -26,9 +26,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_ddb.h"
 #include "opt_gdb.h"
 
@@ -70,6 +67,10 @@ __FBSDID("$FreeBSD$");
 #include <sys/link_elf.h>
 
 #include "linker_if.h"
+
+#ifdef DDB_CTF
+#include <ddb/db_ctf.h>
+#endif
 
 #define MAXSEGS 4
 
@@ -144,6 +145,8 @@ static int	link_elf_lookup_symbol(linker_file_t, const char *,
 		    c_linker_sym_t *);
 static int	link_elf_lookup_debug_symbol(linker_file_t, const char *,
 		    c_linker_sym_t *);
+static int 	link_elf_lookup_debug_symbol_ctf(linker_file_t lf,
+		    const char *name, c_linker_sym_t *sym, linker_ctf_t *lc);
 static int	link_elf_symbol_values(linker_file_t, c_linker_sym_t,
 		    linker_symval_t *);
 static int	link_elf_debug_symbol_values(linker_file_t, c_linker_sym_t,
@@ -162,11 +165,15 @@ static int	link_elf_each_function_nameval(linker_file_t,
 static void	link_elf_reloc_local(linker_file_t);
 static long	link_elf_symtab_get(linker_file_t, const Elf_Sym **);
 static long	link_elf_strtab_get(linker_file_t, caddr_t *);
+#ifdef VIMAGE
+static void	link_elf_propagate_vnets(linker_file_t);
+#endif
 static int	elf_lookup(linker_file_t, Elf_Size, int, Elf_Addr *);
 
 static kobj_method_t link_elf_methods[] = {
 	KOBJMETHOD(linker_lookup_symbol,	link_elf_lookup_symbol),
 	KOBJMETHOD(linker_lookup_debug_symbol,	link_elf_lookup_debug_symbol),
+	KOBJMETHOD(linker_lookup_debug_symbol_ctf, link_elf_lookup_debug_symbol_ctf),
 	KOBJMETHOD(linker_symbol_values,	link_elf_symbol_values),
 	KOBJMETHOD(linker_debug_symbol_values,	link_elf_debug_symbol_values),
 	KOBJMETHOD(linker_search_symbol,	link_elf_search_symbol),
@@ -178,8 +185,12 @@ static kobj_method_t link_elf_methods[] = {
 	KOBJMETHOD(linker_each_function_name,	link_elf_each_function_name),
 	KOBJMETHOD(linker_each_function_nameval, link_elf_each_function_nameval),
 	KOBJMETHOD(linker_ctf_get,		link_elf_ctf_get),
+	KOBJMETHOD(linker_ctf_lookup_typename,  link_elf_ctf_lookup_typename),
 	KOBJMETHOD(linker_symtab_get,		link_elf_symtab_get),
 	KOBJMETHOD(linker_strtab_get,		link_elf_strtab_get),
+#ifdef VIMAGE
+	KOBJMETHOD(linker_propagate_vnets,	link_elf_propagate_vnets),
+#endif
 	KOBJMETHOD_END
 };
 
@@ -347,7 +358,7 @@ link_elf_error(const char *filename, const char *s)
 }
 
 static void
-link_elf_invoke_ctors(caddr_t addr, size_t size)
+link_elf_invoke_cbs(caddr_t addr, size_t size)
 {
 	void (**ctor)(void);
 	size_t i, cnt;
@@ -360,6 +371,17 @@ link_elf_invoke_ctors(caddr_t addr, size_t size)
 		if (ctor[i] != NULL)
 			(*ctor[i])();
 	}
+}
+
+static void
+link_elf_invoke_ctors(linker_file_t lf)
+{
+	KASSERT(lf->ctors_invoked == LF_NONE,
+	    ("%s: file %s ctor state %d",
+	    __func__, lf->filename, lf->ctors_invoked));
+
+	link_elf_invoke_cbs(lf->ctors_addr, lf->ctors_size);
+	lf->ctors_invoked = LF_CTORS;
 }
 
 /*
@@ -392,7 +414,7 @@ link_elf_link_common_finish(linker_file_t lf)
 #endif
 
 	/* Invoke .ctors */
-	link_elf_invoke_ctors(lf->ctors_addr, lf->ctors_size);
+	link_elf_invoke_ctors(lf);
 	return (0);
 }
 
@@ -502,6 +524,7 @@ link_elf_init(void* arg)
 	TAILQ_INIT(&set_pcpu_list);
 #ifdef VIMAGE
 	TAILQ_INIT(&set_vnet_list);
+	vnet_save_init((void *)VNET_START, VNET_STOP - VNET_START);
 #endif
 }
 
@@ -720,6 +743,7 @@ parse_vnet(elf_file_t ef)
 
 	ef->vnet_start = 0;
 	ef->vnet_stop = 0;
+	ef->vnet_base = 0;
 	error = link_elf_lookup_set(&ef->lf, "vnet", (void ***)&ef->vnet_start,
 	    (void ***)&ef->vnet_stop, NULL);
 	/* Error just means there is no vnet data set to relocate. */
@@ -762,7 +786,7 @@ parse_vnet(elf_file_t ef)
 		return (ENOSPC);
 	}
 	memcpy((void *)ef->vnet_base, (void *)ef->vnet_start, size);
-	vnet_data_copy((void *)ef->vnet_base, size);
+	vnet_save_init((void *)ef->vnet_base, size);
 	elf_set_add(&set_vnet_list, ef->vnet_start, ef->vnet_stop,
 	    ef->vnet_base);
 
@@ -1583,6 +1607,34 @@ link_elf_lookup_debug_symbol(linker_file_t lf, const char *name,
 }
 
 static int
+link_elf_lookup_debug_symbol_ctf(linker_file_t lf, const char *name,
+    c_linker_sym_t *sym, linker_ctf_t *lc)
+{
+	elf_file_t ef = (elf_file_t)lf;
+	const Elf_Sym *symp;
+	const char *strp;
+	int i;
+
+	for (i = 0, symp = ef->ddbsymtab; i < ef->ddbsymcnt; i++, symp++) {
+		strp = ef->ddbstrtab + symp->st_name;
+		if (strcmp(name, strp) == 0) {
+			if (symp->st_shndx != SHN_UNDEF ||
+			    (symp->st_value != 0 &&
+				(ELF_ST_TYPE(symp->st_info) == STT_FUNC ||
+				    ELF_ST_TYPE(symp->st_info) ==
+					STT_GNU_IFUNC))) {
+				*sym = (c_linker_sym_t)symp;
+				break;
+			}
+			return (ENOENT);
+		}
+	}
+
+	/* Populate CTF info structure if symbol was found. */
+	return (i < ef->ddbsymcnt ? link_elf_ctf_get_ddb(lf, lc) : ENOENT);
+}
+
+static int
 link_elf_symbol_values1(linker_file_t lf, c_linker_sym_t sym,
     linker_symval_t *symval, bool see_local)
 {
@@ -1924,6 +1976,20 @@ link_elf_strtab_get(linker_file_t lf, caddr_t *strtab)
 
 	return (ef->ddbstrcnt);
 }
+
+#ifdef VIMAGE
+static void
+link_elf_propagate_vnets(linker_file_t lf)
+{
+	elf_file_t ef = (elf_file_t)lf;
+	int size;
+
+	if (ef->vnet_base != 0) {
+		size = (uintptr_t)ef->vnet_stop - (uintptr_t)ef->vnet_start;
+		vnet_data_copy((void *)ef->vnet_base, size);
+	}
+}
+#endif
 
 #if defined(__i386__) || defined(__amd64__) || defined(__aarch64__) || defined(__powerpc__)
 /*

@@ -32,21 +32,6 @@
  * SUCH DAMAGE.
  */
 
-#ifndef lint
-static const char copyright[] =
-"@(#) Copyright (c) 1989, 1993\n\
-	The Regents of the University of California.  All rights reserved.\n";
-#endif /*not lint*/
-
-#if 0
-#ifndef lint
-static char sccsid[] = "@(#)mountd.c	8.15 (Berkeley) 5/1/95";
-#endif /*not lint*/
-#endif
-
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/conf.h>
 #include <sys/fcntl.h>
@@ -85,6 +70,7 @@ __FBSDID("$FreeBSD$");
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <vis.h>
 #include "pathnames.h"
 #include "mntopts.h"
 
@@ -144,10 +130,11 @@ struct exportlist {
 	SLIST_ENTRY(exportlist) entries;
 };
 /* ex_flag bits */
-#define	EX_LINKED	0x1
-#define	EX_DONE		0x2
-#define	EX_DEFSET	0x4
-#define	EX_PUBLICFH	0x8
+#define	EX_LINKED	0x01
+#define	EX_DONE		0x02
+#define	EX_DEFSET	0x04
+#define	EX_PUBLICFH	0x08
+#define	EX_ADMINWARN	0x10
 
 SLIST_HEAD(exportlisthead, exportlist);
 
@@ -286,11 +273,12 @@ static char *exnames_default[2] = { _PATH_EXPORTS, NULL };
 static char **exnames;
 static char **hosts = NULL;
 static int force_v2 = 0;
+static int warn_admin = 1;
 static int resvport_only = 1;
 static int nhosts = 0;
 static int dir_only = 1;
 static int dolog = 0;
-static int got_sighup = 0;
+static _Atomic(int) got_sighup = 0;
 static int xcreated = 0;
 
 static char *svcport_str = NULL;
@@ -321,6 +309,7 @@ static struct pidfh *pfh = NULL;
 #define	OP_QUIET	0x100
 #define OP_MASKLEN	0x200
 #define OP_SEC		0x400
+#define OP_CLASSMASK	0x800	/* mask not specified, is Class A/B/C default */
 
 #ifdef DEBUG
 static int debug = 1;
@@ -447,10 +436,13 @@ main(int argc, char **argv)
 	else
 		close(s);
 
-	while ((c = getopt(argc, argv, "2deh:lnp:RrS")) != -1)
+	while ((c = getopt(argc, argv, "2Adeh:lnp:RrS")) != -1)
 		switch (c) {
 		case '2':
 			force_v2 = 1;
+			break;
+		case 'A':
+			warn_admin = 0;
 			break;
 		case 'e':
 			/* now a no-op, since this is the default */
@@ -1562,10 +1554,13 @@ get_exportlist_one(int passno)
 	char *err_msg = NULL;
 	int len, has_host, got_nondir, dirplen, netgrp;
 	uint64_t exflags;
+	char unvis_dir[PATH_MAX + 1];
+	int unvis_len;
 
 	v4root_phase = 0;
 	anon.cr_groups = NULL;
 	dirhead = (struct dirlist *)NULL;
+	unvis_dir[0] = '\0';
 	while (get_line()) {
 		if (debug)
 			warnx("got line %s", line);
@@ -1632,17 +1627,25 @@ get_exportlist_one(int passno)
 			} else if (*cp == '/') {
 			    savedc = *endcp;
 			    *endcp = '\0';
+			    unvis_len = strnunvis(unvis_dir, sizeof(unvis_dir),
+				cp);
+			    if (unvis_len <= 0) {
+				getexp_err(ep, tgrp, "Cannot strunvis "
+				    "decode dir");
+				goto nextline;
+			    }
 			    if (v4root_phase > 1) {
 				    if (dirp != NULL) {
 					getexp_err(ep, tgrp, "Multiple V4 dirs");
 					goto nextline;
 				    }
 			    }
-			    if (check_dirpath(cp, &err_msg) &&
-				check_statfs(cp, &fsb, &err_msg)) {
+			    if (check_dirpath(unvis_dir, &err_msg) &&
+				check_statfs(unvis_dir, &fsb, &err_msg)) {
 				if ((fsb.f_flags & MNT_AUTOMOUNTED) != 0)
 				    syslog(LOG_ERR, "Warning: exporting of "
-					"automounted fs %s not supported", cp);
+					"automounted fs %s not supported",
+					unvis_dir);
 				if (got_nondir) {
 				    getexp_err(ep, tgrp, "dirs must be first");
 				    goto nextline;
@@ -1653,16 +1656,17 @@ get_exportlist_one(int passno)
 					goto nextline;
 				    }
 				    if (strlen(v4root_dirpath) == 0) {
-					strlcpy(v4root_dirpath, cp,
+					strlcpy(v4root_dirpath, unvis_dir,
 					    sizeof (v4root_dirpath));
-				    } else if (strcmp(v4root_dirpath, cp)
+				    } else if (strcmp(v4root_dirpath, unvis_dir)
 					!= 0) {
 					syslog(LOG_ERR,
-					    "different V4 dirpath %s", cp);
+					    "different V4 dirpath %s",
+					    unvis_dir);
 					getexp_err(ep, tgrp, NULL);
 					goto nextline;
 				    }
-				    dirp = cp;
+				    dirp = unvis_dir;
 				    v4root_phase = 2;
 				    got_nondir = 1;
 				    ep = get_exp();
@@ -1697,11 +1701,26 @@ get_exportlist_one(int passno)
 						fsb.f_fsid.val[1]);
 				    }
 
+				    if (warn_admin != 0 &&
+					(ep->ex_flag & EX_ADMINWARN) == 0 &&
+					strcmp(unvis_dir, fsb.f_mntonname) !=
+					0) {
+					if (debug)
+					    warnx("exporting %s exports entire "
+						"%s file system", unvis_dir,
+						    fsb.f_mntonname);
+					syslog(LOG_ERR, "Warning: exporting %s "
+					    "exports entire %s file system",
+					    unvis_dir, fsb.f_mntonname);
+					ep->ex_flag |= EX_ADMINWARN;
+				    }
+
 				    /*
 				     * Add dirpath to export mount point.
 				     */
-				    dirp = add_expdir(&dirhead, cp, len);
-				    dirplen = len;
+				    dirp = add_expdir(&dirhead, unvis_dir,
+					unvis_len);
+				    dirplen = unvis_len;
 				}
 			    } else {
 				if (err_msg != NULL) {
@@ -1759,6 +1778,11 @@ get_exportlist_one(int passno)
 			nextfield(&cp, &endcp);
 			len = endcp - cp;
 		}
+		if (opt_flags & OP_CLASSMASK)
+			syslog(LOG_WARNING,
+			    "WARNING: No mask specified for %s, "
+			    "using out-of-date default",
+			    (&grp->gr_ptr.gt_net)->nt_name);
 		if (check_options(dirhead)) {
 			getexp_err(ep, tgrp, NULL);
 			goto nextline;
@@ -3395,6 +3419,7 @@ get_net(char *cp, struct netmsk *net, int maskflg)
 			goto fail;
 		bcopy(sa, &net->nt_mask, sa->sa_len);
 		opt_flags |= OP_HAVEMASK;
+		opt_flags &= ~OP_CLASSMASK;
 	} else {
 		/* The specified sockaddr is a network address. */
 		bcopy(sa, &net->nt_net, sa->sa_len);
@@ -3428,9 +3453,6 @@ get_net(char *cp, struct netmsk *net, int maskflg)
 		    (opt_flags & OP_MASK) == 0) {
 			in_addr_t addr;
 
-			syslog(LOG_WARNING,
-			    "WARNING: No mask specified for %s, "
-			    "using out-of-date default", name);
 			addr = ((struct sockaddr_in *)sa)->sin_addr.s_addr;
 			if (IN_CLASSA(addr))
 				preflen = 8;
@@ -3445,7 +3467,7 @@ get_net(char *cp, struct netmsk *net, int maskflg)
 
 			bcopy(sa, &net->nt_mask, sa->sa_len);
 			makemask(&net->nt_mask, (int)preflen);
-			opt_flags |= OP_HAVEMASK;
+			opt_flags |= OP_HAVEMASK | OP_CLASSMASK;
 		}
 	}
 

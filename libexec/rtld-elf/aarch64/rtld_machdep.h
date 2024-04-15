@@ -26,8 +26,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef RTLD_MACHDEP_H
@@ -47,6 +45,8 @@ struct Struct_Obj_Entry;
 	(const Elf_Dyn *)_dynamic_addr;					\
 })
 
+bool arch_digest_note(struct Struct_Obj_Entry *obj, const Elf_Note *note);
+
 Elf_Addr reloc_jmpslot(Elf_Addr *where, Elf_Addr target,
     const struct Struct_Obj_Entry *defobj, const struct Struct_Obj_Entry *obj,
     const Elf_Rel *rel);
@@ -64,7 +64,7 @@ Elf_Addr reloc_jmpslot(Elf_Addr *where, Elf_Addr target,
  * Pass zeros into the ifunc resolver so we can change them later. The first
  * 8 arguments on arm64 are passed in registers so make them known values
  * if we decide to use them later. Because of this ifunc resolvers can assume
- * no arguments are passeed in, and if this changes later will be able to
+ * no arguments are passed in, and if this changes later will be able to
  * compare the argument with 0 to see if it is set.
  */
 #define	call_ifunc_resolver(ptr) \

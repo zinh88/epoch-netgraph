@@ -12,8 +12,6 @@
  *          Wolfram Schneider <wosch@FreeBSD.org>
  *          Thomas Moestl <tmoestl@gmx.net>
  *          Eitan Adler <eadler@FreeBSD.org>
- *
- * $FreeBSD$
  */
 
 #include <sys/param.h>
@@ -295,17 +293,27 @@ machine_init(struct statics *statics)
 	size = sizeof(carc_en);
 	if (arc_enabled &&
 	    sysctlbyname("vfs.zfs.compressed_arc_enabled", &carc_en, &size,
-	    NULL, 0) == 0 && carc_en == 1)
-		carc_enabled = 1;
+	    NULL, 0) == 0 && carc_en == 1) {
+		uint64_t uncomp_sz;
+
+		/*
+		 * Don't report compression stats if no data is in the ARC.
+		 * Otherwise, we end up printing a blank line.
+		 */
+		size = sizeof(uncomp_sz);
+		if (sysctlbyname("kstat.zfs.misc.arcstats.uncompressed_size",
+		    &uncomp_sz, &size, NULL, 0) == 0 && uncomp_sz != 0)
+			carc_enabled = 1;
+	}
 
 	kd = kvm_open(NULL, _PATH_DEVNULL, NULL, O_RDONLY, "kvm_open");
 	if (kd == NULL)
 		return (-1);
 
 	size = sizeof(nswapdev);
-	if (sysctlbyname("vm.nswapdev", &nswapdev, &size, NULL,
-		0) == 0 && nswapdev != 0)
-			has_swap = 1;
+	if (sysctlbyname("vm.nswapdev", &nswapdev, &size, NULL, 0) == 0 &&
+	    nswapdev != 0)
+		has_swap = 1;
 
 	GETSYSCTL("kern.ccpu", ccpu);
 
@@ -1256,19 +1264,19 @@ compare_tid(const void *p1, const void *p2)
  *	distinct keys.  The keys (in descending order of importance) are:
  *	percent cpu, cpu ticks, state, resident set size, total virtual
  *	memory usage.  The process states are ordered as follows (from least
- *	to most important):  WAIT, zombie, sleep, stop, start, run.  The
- *	array declaration below maps a process state index into a number
- *	that reflects this ordering.
+ *	to most important):  run, zombie, idle, interrupt wait, stop, sleep.
+ *	The array declaration below maps a process state index into a
+ *	number that reflects this ordering.
  */
 
-static int sorted_state[] = {
-	0,	/* not used		*/
-	3,	/* sleep		*/
-	1,	/* ABANDONED (WAIT)	*/
-	6,	/* run			*/
-	5,	/* start		*/
-	2,	/* zombie		*/
-	4	/* stop			*/
+static const int sorted_state[] = {
+	[SIDL] =	3,	/* being created	*/
+	[SRUN] =	1,	/* running/runnable	*/
+	[SSLEEP] =	6,	/* sleeping		*/
+	[SSTOP] =	5,	/* stopped/suspended	*/
+	[SZOMB] =	2,	/* zombie		*/
+	[SWAIT] =	4,	/* intr			*/
+	[SLOCK] =	7,	/* blocked on lock	*/
 };
 
 

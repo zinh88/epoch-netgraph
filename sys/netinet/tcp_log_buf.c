@@ -28,8 +28,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_inet.h"
 #include <sys/param.h>
 #include <sys/arb.h>
@@ -1928,7 +1926,7 @@ tcp_log_state_change(struct tcpcb *tp, int state)
 	case TCP_LOG_STATE_CLEAR:
 		while ((log_entry = STAILQ_FIRST(&tp->t_logs)) != NULL)
 			tcp_log_remove_log_head(tp, log_entry);
-		/* Fall through */
+		/* FALLTHROUGH */
 
 	case TCP_LOG_STATE_OFF:
 		tp->_t_logstate = TCP_LOG_STATE_OFF;
@@ -2444,7 +2442,7 @@ tcp_log_dump_tp_logbuf(struct tcpcb *tp, char *reason, int how, bool force)
 	if (reason != NULL)
 		strlcpy(entry->tldl_reason, reason, TCP_LOG_REASON_LEN);
 	else
-		strlcpy(entry->tldl_reason, "UNKNOWN", TCP_LOG_ID_LEN);
+		strlcpy(entry->tldl_reason, "UNKNOWN", TCP_LOG_REASON_LEN);
 	entry->tldl_ie = inp->inp_inc.inc_ie;
 	if (inp->inp_inc.inc_flags & INC_ISIPV6)
 		entry->tldl_af = AF_INET6;
@@ -2534,7 +2532,7 @@ tcp_log_dump_node_logbuf(struct tcp_log_id_node *tln, char *reason, int how)
 	if (reason != NULL)
 		strlcpy(entry->tldl_reason, reason, TCP_LOG_REASON_LEN);
 	else
-		strlcpy(entry->tldl_reason, "UNKNOWN", TCP_LOG_ID_LEN);
+		strlcpy(entry->tldl_reason, "UNKNOWN", TCP_LOG_REASON_LEN);
 	entry->tldl_ie = tln->tln_ie;
 	entry->tldl_entries = tln->tln_entries;
 	entry->tldl_count = tln->tln_count;

@@ -1,4 +1,3 @@
-# $FreeBSD$
 
 .include <src.opts.mk>
 
@@ -25,7 +24,7 @@ DATAPACKAGE=	periodic
 CONFGROUPS+=		IPFILTER
 IPFILTER+=		510.ipfdenied
 IPFILTER+=		610.ipf6denied
-IPFILTERPACKAGE=	ipfilter
+IPFILTERPACKAGE=	ipf
 .endif
 
 .if ${MK_IPFW} != "no"

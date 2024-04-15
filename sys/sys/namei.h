@@ -27,9 +27,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)namei.h	8.5 (Berkeley) 1/9/95
- * $FreeBSD$
  */
 
 #ifndef _SYS_NAMEI_H_
@@ -199,8 +196,17 @@ int	cache_fplookup(struct nameidata *ndp, enum cache_fpl_status *status,
 /*
  * Flags in ni_lcf, valid for the duration of the namei call.
  */
-#define	NI_LCF_STRICTRELATIVE	0x0001	/* relative lookup only */
+#define	NI_LCF_STRICTREL	0x0001	/* relative lookup only */
 #define	NI_LCF_CAP_DOTDOT	0x0002	/* ".." in strictrelative case */
+/* Track capability restrictions seperately for violation ktracing. */
+#define	NI_LCF_STRICTREL_KTR	0x0004	/* trace relative lookups */
+#define	NI_LCF_CAP_DOTDOT_KTR	0x0008	/* ".." in strictrelative case */
+#define	NI_LCF_KTR_FLAGS	(NI_LCF_STRICTREL_KTR | NI_LCF_CAP_DOTDOT_KTR)
+
+#define	NI_CAP_VIOLATION(ndp, path)	do {			\
+	ktrcapfail(CAPFAIL_NAMEI, (path));			\
+	(ndp)->ni_lcf &= ~NI_LCF_KTR_FLAGS;			\
+} while (0)
 
 /*
  * Initialization of a nameidata structure.
@@ -267,15 +273,6 @@ do {										\
 	(ndp)->ni_dvp_seqc = SEQC_MOD;						\
 	(ndp)->ni_vp_seqc = SEQC_MOD;						\
 } while (0)
-
-#define NDF_NO_DVP_RELE		0x00000001
-#define NDF_NO_DVP_UNLOCK	0x00000002
-#define NDF_NO_DVP_PUT		0x00000003
-#define NDF_NO_VP_RELE		0x00000004
-#define NDF_NO_VP_UNLOCK	0x00000008
-#define NDF_NO_VP_PUT		0x0000000c
-#define NDF_NO_STARTDIR_RELE	0x00000010
-#define NDF_NO_FREE_PNBUF	0x00000020
 
 #define NDFREE_IOCTLCAPS(ndp) do {						\
 	struct nameidata *_ndp = (ndp);						\

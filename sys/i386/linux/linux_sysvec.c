@@ -26,9 +26,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #define __ELF_WORD_SIZE	32
 
 #include <sys/param.h>
@@ -129,11 +126,14 @@ linux_fixup(uintptr_t *stack_base, struct image_params *imgp)
 	argv = base;
 	envp = base + (imgp->args->argc + 1);
 	base--;
-	suword(base, (intptr_t)envp);
+	if (suword(base, (intptr_t)envp) != 0)
+		return (EFAULT);
 	base--;
-	suword(base, (intptr_t)argv);
+	if (suword(base, (intptr_t)argv) != 0)
+		return (EFAULT);
 	base--;
-	suword(base, imgp->args->argc);
+	if (suword(base, imgp->args->argc) != 0)
+		return (EFAULT);
 	*stack_base = (uintptr_t)base;
 	return (0);
 }
@@ -145,6 +145,7 @@ linux32_arch_copyout_auxargs(struct image_params *imgp, Elf_Auxinfo **pos)
 	AUXARGS_ENTRY((*pos), LINUX_AT_SYSINFO_EHDR, linux_vdso_base);
 	AUXARGS_ENTRY((*pos), LINUX_AT_SYSINFO, __kernel_vsyscall);
 	AUXARGS_ENTRY((*pos), LINUX_AT_HWCAP, cpu_feature);
+	AUXARGS_ENTRY((*pos), LINUX_AT_HWCAP2, linux_x86_elf_hwcap2());
 	AUXARGS_ENTRY((*pos), LINUX_AT_PLATFORM, PTROUT(linux_platform));
 }
 
@@ -520,11 +521,11 @@ linux_fetch_syscall_args(struct thread *td)
 	sa->args[2] = frame->tf_edx;
 	sa->args[3] = frame->tf_esi;
 	sa->args[4] = frame->tf_edi;
-	sa->args[5] = frame->tf_ebp;	/* Unconfirmed */
+	sa->args[5] = frame->tf_ebp;
 
 	if (sa->code >= p->p_sysent->sv_size)
 		/* nosys */
-		sa->callp = &p->p_sysent->sv_table[p->p_sysent->sv_size - 1];
+		sa->callp = &nosys_sysent;
 	else
 		sa->callp = &p->p_sysent->sv_table[sa->code];
 

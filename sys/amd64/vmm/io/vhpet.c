@@ -25,13 +25,9 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_bhyve_snapshot.h"
 
 #include <sys/param.h>
@@ -780,7 +776,7 @@ vhpet_snapshot(struct vhpet *vhpet, struct vm_snapshot_meta *meta)
 	/* at restore time the countbase should have the value it had when the
 	 * snapshot was created; since the value is not directly kept in
 	 * vhpet->countbase, but rather computed relative to the current system
-	 * uptime using countbase_sbt, save the value retured by vhpet_counter
+	 * uptime using countbase_sbt, save the value returned by vhpet_counter
 	 */
 	if (meta->op == VM_SNAPSHOT_SAVE)
 		countbase = vhpet_counter(vhpet, NULL);

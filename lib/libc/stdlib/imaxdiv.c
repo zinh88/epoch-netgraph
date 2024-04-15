@@ -26,9 +26,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <inttypes.h>
 
 /* See comments in div.c for implementation details. */
@@ -39,11 +36,6 @@ imaxdiv(intmax_t numer, intmax_t denom)
 
 	retval.quot = numer / denom;
 	retval.rem = numer % denom;
-#if !defined(__STDC_VERSION__) || (__STDC_VERSION__ < 199901L)
-	if (numer >= 0 && retval.rem < 0) {
-		retval.quot++;
-		retval.rem -= denom;
-	}
-#endif
+
 	return (retval);
 }

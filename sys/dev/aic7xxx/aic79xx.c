@@ -48,7 +48,6 @@
 #include "aicasm/aicasm_insformat.h"
 #else
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 #include <dev/aic7xxx/aic79xx_osm.h>
 #include <dev/aic7xxx/aic79xx_inline.h>
 #include <dev/aic7xxx/aicasm/aicasm_insformat.h>
@@ -9442,7 +9441,7 @@ bus_reset:
 				/*
 				 * The sequencer will never re-reference the
 				 * in-core SCB.  To make sure we are notified
-				 * during reslection, set the MK_MESSAGE flag in
+				 * during reselection, set the MK_MESSAGE flag in
 				 * the card's copy of the SCB.
 				 */
 				ahd_outb(ahd, SCB_CONTROL,
@@ -10318,7 +10317,10 @@ ahd_handle_target_cmd(struct ahd_softc *ahd, struct target_cmd *cmd)
 		ahd->pending_device = lstate;
 		ahd_freeze_ccb((union ccb *)atio);
 		atio->ccb_h.flags |= CAM_DIS_DISCONNECT;
+	} else {
+		atio->ccb_h.flags &= ~CAM_DIS_DISCONNECT;
 	}
+
 	xpt_done((union ccb*)atio);
 	return (0);
 }

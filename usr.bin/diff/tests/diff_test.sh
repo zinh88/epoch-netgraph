@@ -1,4 +1,3 @@
-# $FreeBSD$
 
 atf_test_case simple
 atf_test_case unified
@@ -267,6 +266,10 @@ report_identical_body()
 {
 	printf "\tA\n" > A
 	printf "\tB\n" > B
+	atf_check -s exit:0 -o match:"are identical" \
+		  diff -s A A
+	atf_check -s exit:1 -o not-match:"are identical" \
+		  diff -s A B
 	chmod -r B
 	atf_check -s exit:2 -e inline:"diff: B: Permission denied\n" \
 		-o empty diff -s A B

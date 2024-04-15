@@ -27,13 +27,9 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- *	@(#)tcp_subr.c	8.2 (Berkeley) 5/24/95
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_inet.h"
 #include "opt_inet6.h"
 #include "opt_ipsec.h"
@@ -291,11 +287,19 @@ SYSCTL_INT(_net_inet_tcp, OID_AUTO, ts_offset_per_conn, CTLFLAG_VNET | CTLFLAG_R
 static volatile uint32_t number_of_tcp_connections_pacing = 0;
 static uint32_t shadow_num_connections = 0;
 static counter_u64_t tcp_pacing_failures;
+static counter_u64_t tcp_dgp_failures;
+static uint32_t shadow_tcp_pacing_dgp = 0;
+static volatile uint32_t number_of_dgp_connections = 0;
 
 static int tcp_pacing_limit = 10000;
 SYSCTL_INT(_net_inet_tcp, OID_AUTO, pacing_limit, CTLFLAG_RW,
     &tcp_pacing_limit, 1000,
     "If the TCP stack does pacing, is there a limit (-1 = no, 0 = no pacing N = number of connections)");
+
+static int tcp_dgp_limit = -1;
+SYSCTL_INT(_net_inet_tcp, OID_AUTO, dgp_limit, CTLFLAG_RW,
+    &tcp_dgp_limit, -1,
+    "If the TCP stack does DGP, is there a limit (-1 = no, 0 = no dgp N = number of connections)");
 
 SYSCTL_UINT(_net_inet_tcp, OID_AUTO, pacing_count, CTLFLAG_RD,
     &shadow_num_connections, 0, "Number of TCP connections being paced");
@@ -303,12 +307,24 @@ SYSCTL_UINT(_net_inet_tcp, OID_AUTO, pacing_count, CTLFLAG_RD,
 SYSCTL_COUNTER_U64(_net_inet_tcp, OID_AUTO, pacing_failures, CTLFLAG_RD,
     &tcp_pacing_failures, "Number of times we failed to enable pacing to avoid exceeding the limit");
 
+SYSCTL_COUNTER_U64(_net_inet_tcp, OID_AUTO, dgp_failures, CTLFLAG_RD,
+    &tcp_dgp_failures, "Number of times we failed to enable dgp to avoid exceeding the limit");
+
 static int	tcp_log_debug = 0;
 SYSCTL_INT(_net_inet_tcp, OID_AUTO, log_debug, CTLFLAG_RW,
     &tcp_log_debug, 0, "Log errors caused by incoming TCP segments");
 
-static int	tcp_tcbhashsize;
-SYSCTL_INT(_net_inet_tcp, OID_AUTO, tcbhashsize, CTLFLAG_RDTUN | CTLFLAG_NOFETCH,
+/*
+ * Target size of TCP PCB hash tables. Must be a power of two.
+ *
+ * Note that this can be overridden by the kernel environment
+ * variable net.inet.tcp.tcbhashsize
+ */
+#ifndef TCBHASHSIZE
+#define TCBHASHSIZE	0
+#endif
+static int	tcp_tcbhashsize = TCBHASHSIZE;
+SYSCTL_INT(_net_inet_tcp, OID_AUTO, tcbhashsize, CTLFLAG_RDTUN,
     &tcp_tcbhashsize, 0, "Size of TCP control-block hashtable");
 
 static int	do_tcpdrain = 1;
@@ -536,6 +552,9 @@ tcp_switch_back_to_default(struct tcpcb *tp)
 
 	KASSERT(tp->t_fb != &tcp_def_funcblk,
 	    ("%s: called by the built-in default stack", __func__));
+
+	if (tp->t_fb->tfb_tcp_timer_stop_all != NULL)
+		tp->t_fb->tfb_tcp_timer_stop_all(tp);
 
 	/*
 	 * Now, we'll find a new function block to use.
@@ -1067,7 +1086,7 @@ tcp_default_fb_init(struct tcpcb *tp, void **ptr)
 	/* We don't use the pointer */
 	*ptr = NULL;
 
-	KASSERT(tp->t_state >= 0 && tp->t_state < TCPS_TIME_WAIT,
+	KASSERT(tp->t_state < TCPS_TIME_WAIT,
 	    ("%s: connection %p in unexpected state %d", __func__, tp,
 	    tp->t_state));
 
@@ -1153,16 +1172,6 @@ tcp_default_fb_fini(struct tcpcb *tp, int tcb_is_purged)
 	tp->t_acktime = 0;
 	return;
 }
-
-/*
- * Target size of TCP PCB hash tables. Must be a power of two.
- *
- * Note that this can be overridden by the kernel environment
- * variable net.inet.tcp.tcbhashsize
- */
-#ifndef TCBHASHSIZE
-#define TCBHASHSIZE	0
-#endif
 
 MALLOC_DEFINE(M_TCPLOG, "tcplog", "TCP address and flags print buffers");
 MALLOC_DEFINE(M_TCPFUNCTIONS, "tcpfunc", "TCP function set memory");
@@ -1510,7 +1519,6 @@ VNET_SYSINIT(tcp_vnet_init, SI_SUB_PROTO_DOMAIN, SI_ORDER_FOURTH,
 static void
 tcp_init(void *arg __unused)
 {
-	const char *tcbhash_tuneable;
 	int hashsize;
 
 	tcp_reass_global_init();
@@ -1574,13 +1582,12 @@ tcp_init(void *arg __unused)
 	tcp_uncomp_total = counter_u64_alloc(M_WAITOK);
 	tcp_bad_csums = counter_u64_alloc(M_WAITOK);
 	tcp_pacing_failures = counter_u64_alloc(M_WAITOK);
+	tcp_dgp_failures = counter_u64_alloc(M_WAITOK);
 #ifdef TCPPCAP
 	tcp_pcap_init();
 #endif
 
-	hashsize = TCBHASHSIZE;
-	tcbhash_tuneable = "net.inet.tcp.tcbhashsize";
-	TUNABLE_INT_FETCH(tcbhash_tuneable, &hashsize);
+	hashsize = tcp_tcbhashsize;
 	if (hashsize == 0) {
 		/*
 		 * Auto tune the hash size based on maxsockets.
@@ -1597,7 +1604,7 @@ tcp_init(void *arg __unused)
 			hashsize = 512;
 		if (bootverbose)
 			printf("%s: %s auto tuned to %d\n", __func__,
-			    tcbhash_tuneable, hashsize);
+			    "net.inet.tcp.tcbhashsize", hashsize);
 	}
 	/*
 	 * We require a hashsize to be a power of two.
@@ -2049,9 +2056,15 @@ tcp_respond(struct tcpcb *tp, void *ipgen, struct tcphdr *th, struct mbuf *m,
 			ulen = tlen - sizeof(struct ip);
 			uh->uh_ulen = htons(ulen);
 		}
-		ip->ip_tos = ect;
 		ip->ip_len = htons(tlen);
-		ip->ip_ttl = V_ip_defttl;
+		if (inp != NULL) {
+			ip->ip_tos = inp->inp_ip_tos & ~IPTOS_ECN_MASK;
+			ip->ip_ttl = inp->inp_ip_ttl;
+		} else {
+			ip->ip_tos = 0;
+			ip->ip_ttl = V_ip_defttl;
+		}
+		ip->ip_tos |= ect;
 		if (port) {
 			ip->ip_p = IPPROTO_UDP;
 		} else {
@@ -2195,7 +2208,8 @@ tcp_respond(struct tcpcb *tp, void *ipgen, struct tcphdr *th, struct mbuf *m,
 #ifdef INET6
 	if (isipv6) {
 		TCP_PROBE5(send, NULL, tp, ip6, tp, nth);
-		output_ret = ip6_output(m, NULL, NULL, 0, NULL, NULL, inp);
+		output_ret = ip6_output(m, inp ? inp->in6p_outputopts : NULL,
+		    NULL, 0, NULL, NULL, inp);
 	}
 #endif /* INET6 */
 #if defined(INET) && defined(INET6)
@@ -2272,6 +2286,9 @@ tcp_newtcpcb(struct inpcb *inp)
 	/* All mbuf queue/ack compress flags should be off */
 	tcp_lro_features_off(tp);
 
+	tp->t_hpts_cpu = HPTS_CPU_NONE;
+	tp->t_lro_cpu = HPTS_CPU_NONE;
+
 	callout_init_rw(&tp->t_callout, &inp->inp_lock, CALLOUT_RETURNUNLOCKED);
 	for (int i = 0; i < TT_N; i++)
 		tp->t_timers[i] = SBT_MAX;
@@ -2314,9 +2331,6 @@ tcp_newtcpcb(struct inpcb *inp)
 	 * which may match an IPv4-mapped IPv6 address.
 	 */
 	inp->inp_ip_ttl = V_ip_defttl;
-#ifdef TCPHPTS
-	tcp_hpts_init(tp);
-#endif
 #ifdef TCPPCAP
 	/*
 	 * Init the TCP PCAP queues.
@@ -2381,11 +2395,8 @@ tcp_discardcb(struct tcpcb *tp)
 #endif
 
 	INP_WLOCK_ASSERT(inp);
-
-	tcp_timer_stop(tp);
-	if (tp->t_fb->tfb_tcp_timer_stop_all) {
-		tp->t_fb->tfb_tcp_timer_stop_all(tp);
-	}
+	MPASS(!callout_active(&tp->t_callout));
+	MPASS(TAILQ_EMPTY(&tp->snd_holes));
 
 	/* free the reassembly queue, if any */
 	tcp_reass_flush(tp);
@@ -2395,9 +2406,6 @@ tcp_discardcb(struct tcpcb *tp)
 	if (tp->t_flags & TF_TOE)
 		tcp_offload_detach(tp);
 #endif
-
-	tcp_free_sackholes(tp);
-
 #ifdef TCPPCAP
 	/* Free the TCP PCAP queues. */
 	tcp_pcap_drain(&(tp->t_inpkts));
@@ -2525,14 +2533,15 @@ tcp_close(struct tcpcb *tp)
 		tcp_fastopen_decrement_counter(tp->t_tfo_pending);
 		tp->t_tfo_pending = NULL;
 	}
-#ifdef TCPHPTS
-	tcp_hpts_remove(tp);
-#endif
+	tcp_timer_stop(tp);
+	if (tp->t_fb->tfb_tcp_timer_stop_all != NULL)
+		tp->t_fb->tfb_tcp_timer_stop_all(tp);
 	in_pcbdrop(inp);
 	TCPSTAT_INC(tcps_closed);
 	if (tp->t_state != TCPS_CLOSED)
 		tcp_state_change(tp, TCPS_CLOSED);
 	KASSERT(inp->inp_socket != NULL, ("tcp_close: inp_socket NULL"));
+	tcp_free_sackholes(tp);
 	soisdisconnected(so);
 	if (inp->inp_flags & INP_SOCKREF) {
 		inp->inp_flags &= ~INP_SOCKREF;
@@ -3272,7 +3281,7 @@ tcp_drop_syn_sent(struct inpcb *inp, int errno)
 	if (tp->t_state != TCPS_SYN_SENT)
 		return (inp);
 
-	if (IS_FASTOPEN(tp->t_flags))
+	if (tp->t_flags & TF_FASTOPEN)
 		tcp_fastopen_disable_path(tp);
 
 	tp = tcp_drop(tp, errno);
@@ -3971,13 +3980,6 @@ tcp_inptoxtp(const struct inpcb *inp, struct xtcpcb *xt)
 
 	xt->xt_len = sizeof(struct xtcpcb);
 	in_pcbtoxinpcb(inp, &xt->xt_inp);
-	/*
-	 * TCP doesn't use inp_ppcb pointer, we embed inpcb into tcpcb.
-	 * Fixup the pointer that in_pcbtoxinpcb() has set.  When printing
-	 * TCP netstat(1) used to use this pointer, so this fixup needs to
-	 * stay for stable/14.
-	 */
-	xt->xt_inp.inp_ppcb = (uintptr_t)tp;
 }
 
 void
@@ -4022,6 +4024,43 @@ tcp_can_enable_pacing(void)
 		counter_u64_add(tcp_pacing_failures, 1);
 		return (0);
 	}
+}
+
+int
+tcp_incr_dgp_pacing_cnt(void)
+{
+	if ((tcp_dgp_limit == -1) ||
+	    (tcp_dgp_limit > number_of_dgp_connections)) {
+		atomic_fetchadd_int(&number_of_dgp_connections, 1);
+		shadow_tcp_pacing_dgp = number_of_dgp_connections;
+		return (1);
+	} else {
+		counter_u64_add(tcp_dgp_failures, 1);
+		return (0);
+	}
+}
+
+static uint8_t tcp_dgp_warning = 0;
+
+void
+tcp_dec_dgp_pacing_cnt(void)
+{
+	uint32_t ret;
+
+	ret = atomic_fetchadd_int(&number_of_dgp_connections, -1);
+	shadow_tcp_pacing_dgp = number_of_dgp_connections;
+	KASSERT(ret != 0, ("number_of_dgp_connections -1 would cause wrap?"));
+	if (ret == 0) {
+		if (tcp_dgp_limit != -1) {
+			printf("Warning all DGP is now disabled, count decrements invalidly!\n");
+			tcp_dgp_limit = 0;
+			tcp_dgp_warning = 1;
+		} else if (tcp_dgp_warning == 0) {
+			printf("Warning DGP pacing is invalid, invalid decrement\n");
+			tcp_dgp_warning = 1;
+		}
+	}
+
 }
 
 static uint8_t tcp_pacing_warning = 0;
@@ -4201,19 +4240,19 @@ tcp_change_time_units(struct tcpcb *tp, int granularity)
 			uint32_t val, frac;
 
 			val = USEC_2_TICKS(tp->t_rttvar);
-			frac = tp->t_srtt % (HPTS_USEC_IN_SEC / hz);
+			frac = tp->t_rttvar % (HPTS_USEC_IN_SEC / hz);
 			tp->t_rttvar = val <<  TCP_RTTVAR_SHIFT;
 			/*
 			 * frac is the fractional part here is left
 			 * over from converting to hz and shifting.
-			 * We need to convert this to the 5 bit
+			 * We need to convert this to the 4 bit
 			 * remainder.
 			 */
 			if (frac) {
 				if (hz == 1000) {
-					frac = (((uint64_t)frac *  (uint64_t)TCP_RTT_SCALE) / (uint64_t)HPTS_USEC_IN_MSEC);
+					frac = (((uint64_t)frac *  (uint64_t)TCP_RTTVAR_SCALE) / (uint64_t)HPTS_USEC_IN_MSEC);
 				} else {
-					frac = (((uint64_t)frac * (uint64_t)(hz) * (uint64_t)TCP_RTT_SCALE) /(uint64_t)HPTS_USEC_IN_SEC);
+					frac = (((uint64_t)frac * (uint64_t)(hz) * (uint64_t)TCP_RTTVAR_SCALE) /(uint64_t)HPTS_USEC_IN_SEC);
 				}
 				tp->t_rttvar += frac;
 			}
@@ -4315,9 +4354,7 @@ tcp_req_log_req_info(struct tcpcb *tp, struct tcp_sendfile_track *req,
 		struct timeval tv;
 
 		memset(&log.u_bbr, 0, sizeof(log.u_bbr));
-#ifdef TCPHPTS
 		log.u_bbr.inhpts = tcp_in_hpts(tp);
-#endif
 		log.u_bbr.flex8 = val;
 		log.u_bbr.rttProp = req->timestamp;
 		log.u_bbr.delRate = req->start;
@@ -4545,7 +4582,7 @@ tcp_req_alloc_req_full(struct tcpcb *tp, struct tcp_snd_req *req, uint64_t ts, i
 	if (tp->t_tcpreq_req) {
 		for(i = 0, allocated = 0; i < MAX_TCP_TRK_REQ; i++) {
 			fil = &tp->t_tcpreq_info[i];
-			if (fil->flags != TCP_TRK_TRACK_FLG_USED)
+			if ((fil->flags & TCP_TRK_TRACK_FLG_USED) == 0)
 				continue;
 			if ((fil->timestamp == req->timestamp) &&
 			    (fil->start == req->start) &&
@@ -4577,6 +4614,7 @@ tcp_req_alloc_req_full(struct tcpcb *tp, struct tcp_snd_req *req, uint64_t ts, i
 			allocated = 1;
 			fil->flags = TCP_TRK_TRACK_FLG_USED;
 			fil->timestamp = req->timestamp;
+			fil->playout_ms = req->playout_ms;
 			fil->localtime = ts;
 			fil->start = req->start;
 			if (req->flags & TCP_LOG_HTTPD_RANGE_END) {
@@ -4593,7 +4631,10 @@ tcp_req_alloc_req_full(struct tcpcb *tp, struct tcp_snd_req *req, uint64_t ts, i
 			fil->sbcc_at_s = tptosocket(tp)->so_snd.sb_ccc;
 			fil->start_seq = tp->snd_una +
 			    tptosocket(tp)->so_snd.sb_ccc;
-			fil->end_seq = (fil->start_seq + ((uint32_t)(fil->end - fil->start)));
+			if (req->flags & TCP_LOG_HTTPD_RANGE_END)
+				fil->end_seq = (fil->start_seq + ((uint32_t)(fil->end - fil->start)));
+			else
+				fil->end_seq = 0;
 			if (tptosocket(tp)->so_snd.sb_tls_info) {
 				/*
 				 * This session is doing TLS. Take a swag guess
@@ -4676,4 +4717,31 @@ tcp_get_srtt(struct tcpcb *tp, int granularity)
 		srtt = srtt >> TCP_RTT_SHIFT;
 
 	return (srtt);
+}
+
+void
+tcp_account_for_send(struct tcpcb *tp, uint32_t len, uint8_t is_rxt,
+    uint8_t is_tlp, bool hw_tls)
+{
+
+	if (is_tlp) {
+		tp->t_sndtlppack++;
+		tp->t_sndtlpbyte += len;
+	}
+	/* To get total bytes sent you must add t_snd_rxt_bytes to t_sndbytes */
+	if (is_rxt)
+		tp->t_snd_rxt_bytes += len;
+	else
+		tp->t_sndbytes += len;
+
+#ifdef KERN_TLS
+	if (hw_tls && is_rxt && len != 0) {
+		uint64_t rexmit_percent;
+
+		rexmit_percent = (1000ULL * tp->t_snd_rxt_bytes) /
+		    (10ULL * (tp->t_snd_rxt_bytes + tp->t_sndbytes));
+		if (rexmit_percent > ktls_ifnet_max_rexmit_pct)
+			ktls_disable_ifnet(tp);
+	}
+#endif
 }

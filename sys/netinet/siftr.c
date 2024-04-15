@@ -60,9 +60,6 @@
  * Most recent update: September 2010
  ******************************************************/
 
-#include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/alq.h>
 #include <sys/errno.h>
@@ -76,6 +73,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/mutex.h>
 #include <sys/pcpu.h>
 #include <sys/proc.h>
+#include <sys/reboot.h>
 #include <sys/sbuf.h>
 #include <sys/sdt.h>
 #include <sys/smp.h>
@@ -136,6 +134,7 @@ __FBSDID("$FreeBSD$");
  * data fields such that the line length could exceed the below value.
  */
 #define MAX_LOG_MSG_LEN 300
+#define MAX_LOG_BATCH_SIZE 3
 /* XXX: Make this a sysctl tunable. */
 #define SIFTR_ALQ_BUFLEN (1000*MAX_LOG_MSG_LEN)
 
@@ -160,6 +159,16 @@ struct pkt_node {
 		DIR_IN = 0,
 		DIR_OUT = 1,
 	}			direction;
+	/* IP version pkt_node relates to; either INP_IPV4 or INP_IPV6. */
+	uint8_t			ipver;
+	/* Local TCP port. */
+	uint16_t		lport;
+	/* Foreign TCP port. */
+	uint16_t		fport;
+	/* Local address. */
+	union in_dependaddr	laddr;
+	/* Foreign address. */
+	union in_dependaddr	faddr;
 	/* Congestion Window (bytes). */
 	uint32_t		snd_cwnd;
 	/* Sending Window (bytes). */
@@ -173,7 +182,7 @@ struct pkt_node {
 	/* Current state of the TCP FSM. */
 	int			conn_state;
 	/* Max Segment Size (bytes). */
-	u_int			max_seg_size;
+	uint32_t		mss;
 	/* Smoothed RTT (usecs). */
 	uint32_t		srtt;
 	/* Is SACK enabled? */
@@ -183,7 +192,7 @@ struct pkt_node {
 	/* Window scaling for recv window. */
 	u_char			rcv_scale;
 	/* TCP control block flags. */
-	u_int			flags;
+	u_int			t_flags;
 	/* Retransmission timeout (usec). */
 	uint32_t		rto;
 	/* Size of the TCP send buffer in bytes. */
@@ -217,7 +226,6 @@ struct flow_info
 #endif
 	uint16_t	lport;			/* local TCP port */
 	uint16_t	fport;			/* foreign TCP port */
-	uint8_t		ipver;			/* IP version */
 	uint32_t	key;			/* flowid of the connection */
 };
 
@@ -363,12 +371,12 @@ siftr_new_hash_node(struct flow_info info, int dir,
 	}
 }
 
-static void
-siftr_process_pkt(struct pkt_node * pkt_node)
+static int
+siftr_process_pkt(struct pkt_node * pkt_node, char *buf)
 {
 	struct flow_hash_node *hash_node;
 	struct listhead *counter_list;
-	struct ale *log_buf;
+	int ret_sz;
 
 	if (pkt_node->flowid == 0) {
 		panic("%s: flowid not available", __func__);
@@ -378,7 +386,7 @@ siftr_process_pkt(struct pkt_node * pkt_node)
 	hash_node = siftr_find_flow(counter_list, pkt_node->flowid);
 
 	if (hash_node == NULL) {
-		return;
+		return 0;
 	} else if (siftr_pkts_per_log > 1) {
 		/*
 		 * Taking the remainder of the counter divided
@@ -394,16 +402,11 @@ siftr_process_pkt(struct pkt_node * pkt_node)
 		 * we wrote a log message for this connection, return.
 		 */
 		if (hash_node->counter > 0)
-			return;
+			return 0;
 	}
 
-	log_buf = alq_getn(siftr_alq, MAX_LOG_MSG_LEN, ALQ_WAITOK);
-
-	if (log_buf == NULL)
-		return; /* Should only happen if the ALQ is shutting down. */
-
 	/* Construct a log message. */
-	log_buf->ae_bytesused = snprintf(log_buf->ae_data, MAX_LOG_MSG_LEN,
+	ret_sz = snprintf(buf, MAX_LOG_MSG_LEN,
 	    "%c,%jd.%06ld,%s,%hu,%s,%hu,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,"
 	    "%u,%u,%u,%u,%u,%u,%u,%u\n",
 	    direction[pkt_node->direction],
@@ -421,10 +424,10 @@ siftr_process_pkt(struct pkt_node * pkt_node)
 	    pkt_node->snd_scale,
 	    pkt_node->rcv_scale,
 	    pkt_node->conn_state,
-	    pkt_node->max_seg_size,
+	    pkt_node->mss,
 	    pkt_node->srtt,
 	    pkt_node->sack_enabled,
-	    pkt_node->flags,
+	    pkt_node->t_flags,
 	    pkt_node->rto,
 	    pkt_node->snd_buf_hiwater,
 	    pkt_node->snd_buf_cc,
@@ -435,7 +438,7 @@ siftr_process_pkt(struct pkt_node * pkt_node)
 	    pkt_node->flowid,
 	    pkt_node->flowtype);
 
-	alq_post_flags(siftr_alq, log_buf, 0);
+	return ret_sz;
 }
 
 static void
@@ -443,8 +446,11 @@ siftr_pkt_manager_thread(void *arg)
 {
 	STAILQ_HEAD(pkthead, pkt_node) tmp_pkt_queue =
 	    STAILQ_HEAD_INITIALIZER(tmp_pkt_queue);
-	struct pkt_node *pkt_node, *pkt_node_temp;
+	struct pkt_node *pkt_node;
 	uint8_t draining;
+	struct ale *log_buf;
+	int ret_sz, cnt = 0;
+	char *bufp;
 
 	draining = 2;
 
@@ -480,12 +486,43 @@ siftr_pkt_manager_thread(void *arg)
 		 */
 		mtx_unlock(&siftr_pkt_mgr_mtx);
 
-		/* Flush all pkt_nodes to the log file. */
-		STAILQ_FOREACH_SAFE(pkt_node, &tmp_pkt_queue, nodes,
-		    pkt_node_temp) {
-			siftr_process_pkt(pkt_node);
-			STAILQ_REMOVE_HEAD(&tmp_pkt_queue, nodes);
-			free(pkt_node, M_SIFTR_PKTNODE);
+		while ((pkt_node = STAILQ_FIRST(&tmp_pkt_queue)) != NULL) {
+
+			log_buf = alq_getn(siftr_alq, MAX_LOG_MSG_LEN *
+			    ((STAILQ_NEXT(pkt_node, nodes) != NULL) ?
+				MAX_LOG_BATCH_SIZE : 1),
+			    ALQ_WAITOK);
+
+			if (log_buf != NULL) {
+				log_buf->ae_bytesused = 0;
+				bufp = log_buf->ae_data;
+			} else {
+				/*
+				 * Should only happen if the ALQ is shutting
+				 * down.
+				 */
+				bufp = NULL;
+			}
+
+			/* Flush all pkt_nodes to the log file. */
+			STAILQ_FOREACH(pkt_node, &tmp_pkt_queue, nodes) {
+				if (log_buf != NULL) {
+					ret_sz = siftr_process_pkt(pkt_node,
+								   bufp);
+					bufp += ret_sz;
+					log_buf->ae_bytesused += ret_sz;
+				}
+				if (++cnt >= MAX_LOG_BATCH_SIZE)
+					break;
+			}
+			if (log_buf != NULL) {
+				alq_post_flags(siftr_alq, log_buf, 0);
+			}
+			for (;cnt > 0; cnt--) {
+				pkt_node = STAILQ_FIRST(&tmp_pkt_queue);
+				STAILQ_REMOVE_HEAD(&tmp_pkt_queue, nodes);
+				free(pkt_node, M_SIFTR_PKTNODE);
+			}
 		}
 
 		KASSERT(STAILQ_EMPTY(&tmp_pkt_queue),
@@ -635,6 +672,11 @@ static inline void
 siftr_siftdata(struct pkt_node *pn, struct inpcb *inp, struct tcpcb *tp,
     int ipver, int dir, int inp_locally_locked)
 {
+	pn->ipver = ipver;
+	pn->lport = inp->inp_lport;
+	pn->fport = inp->inp_fport;
+	pn->laddr = inp->inp_inc.inc_ie.ie_dependladdr;
+	pn->faddr = inp->inp_inc.inc_ie.ie_dependfaddr;
 	pn->snd_cwnd = tp->snd_cwnd;
 	pn->snd_wnd = tp->snd_wnd;
 	pn->rcv_wnd = tp->rcv_wnd;
@@ -643,10 +685,10 @@ siftr_siftdata(struct pkt_node *pn, struct inpcb *inp, struct tcpcb *tp,
 	pn->snd_scale = tp->snd_scale;
 	pn->rcv_scale = tp->rcv_scale;
 	pn->conn_state = tp->t_state;
-	pn->max_seg_size = tp->t_maxseg;
+	pn->mss = tp->t_maxseg;
 	pn->srtt = ((uint64_t)tp->t_srtt * tick) >> TCP_RTT_SHIFT;
 	pn->sack_enabled = (tp->t_flags & TF_SACK_PERMIT) != 0;
-	pn->flags = tp->t_flags;
+	pn->t_flags = tp->t_flags;
 	pn->rto = tp->t_rxtcur * tick;
 	pn->snd_buf_hiwater = inp->inp_socket->so_snd.sb_hiwat;
 	pn->snd_buf_cc = sbused(&inp->inp_socket->so_snd);
@@ -667,7 +709,7 @@ siftr_siftdata(struct pkt_node *pn, struct inpcb *inp, struct tcpcb *tp,
 	 * maximum pps throughput processing when SIFTR is loaded and enabled.
 	 */
 	microtime(&pn->tval);
-	TCP_PROBE1(siftr, &pn);
+	TCP_PROBE1(siftr, pn);
 }
 
 /*
@@ -787,7 +829,6 @@ siftr_chkpkt(struct mbuf **m, struct ifnet *ifp, int flags,
 		info.lport = ntohs(inp->inp_lport);
 		info.fport = ntohs(inp->inp_fport);
 		info.key = hash_id;
-		info.ipver = INP_IPV4;
 
 		hash_node = siftr_new_hash_node(info, dir, ss);
 	}
@@ -937,7 +978,6 @@ siftr_chkpkt6(struct mbuf **m, struct ifnet *ifp, int flags,
 		info.lport = ntohs(inp->inp_lport);
 		info.fport = ntohs(inp->inp_fport);
 		info.key = hash_id;
-		info.ipver = INP_IPV6;
 
 		hash_node = siftr_new_hash_node(info, dir, ss);
 	}
@@ -1253,8 +1293,11 @@ siftr_sysctl_enabled_handler(SYSCTL_HANDLER_ARGS)
 }
 
 static void
-siftr_shutdown_handler(void *arg)
+siftr_shutdown_handler(void *arg, int howto)
 {
+	if ((howto & RB_NOSYNC) != 0 || SCHEDULER_STOPPED())
+		return;
+
 	if (siftr_enabled == 1) {
 		siftr_manage_ops(SIFTR_DISABLE);
 	}

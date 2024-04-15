@@ -1,4 +1,3 @@
-# $FreeBSD$
 
 # Part of a unified Makefile for building kernels.  This part contains all
 # of the definitions that need to be before %BEFORE_DEPEND.
@@ -112,6 +111,11 @@ SAN_CFLAGS+=	-DSAN_NEEDS_INTERCEPTORS -DSAN_INTERCEPTOR_PREFIX=kasan \
 #	upstreamed similar to: https://reviews.llvm.org/D98285
 #
 SAN_CFLAGS+=	-mllvm -asan-mapping-offset=0xdfff208000000000
+.elif ${MACHINE_CPUARCH} == "amd64" && \
+      ${COMPILER_TYPE} == "clang" && ${COMPILER_VERSION} >= 180000
+# Work around https://github.com/llvm/llvm-project/issues/87923, which leads to
+# an assertion failure compiling dtrace.c with asan enabled.
+SAN_CFLAGS+=	-mllvm -asan-use-stack-safety=0
 .endif
 .endif
 
@@ -123,8 +127,13 @@ SAN_CFLAGS+=	-DSAN_NEEDS_INTERCEPTORS -DSAN_INTERCEPTOR_PREFIX=kcsan \
 
 KMSAN_ENABLED!= grep KMSAN opt_global.h || true ; echo
 .if !empty(KMSAN_ENABLED)
+# Disable -fno-sanitize-memory-param-retval until interceptors have been
+# updated to work properly with it.
 SAN_CFLAGS+=	-DSAN_NEEDS_INTERCEPTORS -DSAN_INTERCEPTOR_PREFIX=kmsan \
 		-fsanitize=kernel-memory
+.if ${COMPILER_TYPE} == "clang" && ${COMPILER_VERSION} >= 160000
+SAN_CFLAGS+=	-fno-sanitize-memory-param-retval
+.endif
 .endif
 
 KUBSAN_ENABLED!=	grep KUBSAN opt_global.h || true ; echo
@@ -200,7 +209,7 @@ NORMAL_M= ${AWK} -f $S/tools/makeobjops.awk ${.IMPSRC} -c ; \
 
 NORMAL_FW= uudecode -o ${.TARGET} ${.ALLSRC}
 NORMAL_FWO= ${CC:N${CCACHE_BIN}} -c ${ASM_CFLAGS} ${WERROR} -o ${.TARGET} \
-	$S/kern/firmw.S -DFIRMW_FILE="${.ALLSRC:M*.fw}" \
+	$S/kern/firmw.S -DFIRMW_FILE=\""${.ALLSRC:M*.fw}"\" \
 	-DFIRMW_SYMBOL="${.ALLSRC:M*.fw:C/[-.\/]/_/g}"
 
 # for ZSTD in the kernel (include zstd/lib/freebsd before other CFLAGS)
@@ -252,8 +261,7 @@ CDDL_C=		${CC} -c ${CDDL_CFLAGS} ${WERROR} ${.IMPSRC}
 # Special flags for managing the compat compiles for ZFS
 ZFS_CFLAGS+=	-I$S/contrib/openzfs/module/icp/include \
 	${CDDL_CFLAGS} -DBUILDING_ZFS -DHAVE_UIO_ZEROCOPY \
-	-DWITH_NETDUMP -D__KERNEL__ -D_SYS_CONDVAR_H_ -DSMP \
-	-DIN_FREEBSD_BASE
+	-DWITH_NETDUMP -D__KERNEL__ -D_SYS_CONDVAR_H_ -DSMP
 
 .if ${MACHINE_ARCH} == "amd64"
 ZFS_CFLAGS+= -D__x86_64 -DHAVE_SSE2 -DHAVE_SSSE3 -DHAVE_SSE4_1 -DHAVE_SSE4_2 \

@@ -1,4 +1,3 @@
-# $FreeBSD$
 
 .include <src.opts.mk>
 
@@ -312,6 +311,12 @@ CONFS+=		routed
 CONFGROUPS+=	SMRCD
 SMRCD=		sendmail
 SMRCDPACKAGE=	sendmail
+.endif
+
+.if ${MK_NUAGEINIT} != "no"
+CONFGROUPS+=	NIUAGEINIT
+NIUAGEINIT=		nuageinit
+NIUAGEINITPACKAGE=	nuageinit
 .endif
 
 .if ${MK_UNBOUND} != "no"

@@ -25,13 +25,9 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include "opt_acpi.h"
 #include "opt_isa.h"
 
@@ -46,6 +42,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/module.h>
 #include <sys/proc.h>
 #include <sys/rman.h>
+#include <sys/sysctl.h>
 #include <sys/timeet.h>
 
 #include <isa/rtc.h>
@@ -65,7 +62,7 @@ __FBSDID("$FreeBSD$");
 /* tunable to detect a power loss of the rtc */
 static bool atrtc_power_lost = false;
 SYSCTL_BOOL(_machdep, OID_AUTO, atrtc_power_lost, CTLFLAG_RD, &atrtc_power_lost,
-    false, "RTC lost power on last power cycle (probably caused by an emtpy cmos battery)");
+    false, "RTC lost power on last power cycle (probably caused by an empty cmos battery)");
 
 /*
  * atrtc_lock protects low-level access to individual hardware registers.

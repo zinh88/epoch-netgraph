@@ -40,8 +40,6 @@
 #define	SND_DECLARE_FXDIV
 #include "snd_fxdiv_gen.h"
 
-SND_DECLARE_FILE("$FreeBSD$");
-
 struct snd_dbuf *
 sndbuf_create(device_t dev, char *drv, char *desc, struct pcm_channel *channel)
 {
@@ -149,6 +147,7 @@ sndbuf_free(struct snd_dbuf *b)
 		} else
 			free(b->buf, M_DEVBUF);
 	}
+	seldrain(sndbuf_getsel(b));
 
 	b->tmpbuf = NULL;
 	b->shadbuf = NULL;

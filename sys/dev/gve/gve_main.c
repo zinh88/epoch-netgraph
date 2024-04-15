@@ -31,12 +31,21 @@
 #include "gve.h"
 #include "gve_adminq.h"
 
-#define GVE_DRIVER_VERSION "GVE-FBSD-1.0.0\n"
-#define GVE_VERSION_MAJOR 0
-#define GVE_VERSION_MINOR 9
-#define GVE_VERSION_SUB	0
+#define GVE_DRIVER_VERSION "GVE-FBSD-1.0.1\n"
+#define GVE_VERSION_MAJOR 1
+#define GVE_VERSION_MINOR 0
+#define GVE_VERSION_SUB 1
 
 #define GVE_DEFAULT_RX_COPYBREAK 256
+
+/* Devices supported by this driver. */
+static struct gve_dev {
+        uint16_t vendor_id;
+        uint16_t device_id;
+        const char *name;
+} gve_devs[] = {
+	{ PCI_VENDOR_ID_GOOGLE, PCI_DEV_ID_GVNIC, "gVNIC" }
+};
 
 struct sx gve_global_lock;
 
@@ -701,10 +710,18 @@ gve_service_task(void *arg, int pending)
 static int
 gve_probe(device_t dev)
 {
-	if (pci_get_vendor(dev) == PCI_VENDOR_ID_GOOGLE &&
-	    pci_get_device(dev) == PCI_DEV_ID_GVNIC) {
-		device_set_desc(dev, "gVNIC");
-		return (BUS_PROBE_DEFAULT);
+	uint16_t deviceid, vendorid;
+	int i;
+
+	vendorid = pci_get_vendor(dev);
+	deviceid = pci_get_device(dev);
+
+	for (i = 0; i < nitems(gve_devs); i++) {
+		if (vendorid == gve_devs[i].vendor_id &&
+		    deviceid == gve_devs[i].device_id) {
+			device_set_desc(dev, gve_devs[i].name);
+			return (BUS_PROBE_DEFAULT);
+		}
 	}
 	return (ENXIO);
 }
@@ -851,3 +868,5 @@ DRIVER_MODULE(gve, pci, gve_driver, gve_devclass, 0, 0);
 #else
 DRIVER_MODULE(gve, pci, gve_driver, 0, 0);
 #endif
+MODULE_PNP_INFO("U16:vendor;U16:device;D:#", pci, gve, gve_devs,
+    nitems(gve_devs));

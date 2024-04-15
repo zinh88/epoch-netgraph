@@ -1,4 +1,3 @@
-# $FreeBSD$
 #
 # Option file for FreeBSD /usr/src builds, at least the userland and boot loader
 # portions of the tree. These options generally chose what parts of the tree to
@@ -53,6 +52,9 @@ __<src.opts.mk>__:
 # BROKEN was selected as the least imperfect one considered at the
 # time. Options are added to BROKEN_OPTIONS list on a per-arch basis.
 # At this time, there's no provision for mutually incompatible options.
+# Options listed in 'REQUIRED_OPTIONS' will be hard-wired to 'yes'; this
+# is intended as a transitional measure while options are in the process
+# of being removed.
 
 __DEFAULT_YES_OPTIONS = \
     ACCT \
@@ -73,9 +75,7 @@ __DEFAULT_YES_OPTIONS = \
     BSNMP \
     BZIP2 \
     CALENDAR \
-    CAPSICUM \
     CAROOT \
-    CASPER \
     CCD \
     CDDL \
     CLANG \
@@ -86,7 +86,6 @@ __DEFAULT_YES_OPTIONS = \
     CRYPT \
     CUSE \
     CXGBETOOL \
-    DIALOG \
     DICT \
     DMAGENT \
     DTRACE \
@@ -125,7 +124,6 @@ __DEFAULT_YES_OPTIONS = \
     LEGACY_CONSOLE \
     LLD \
     LLD_BOOTSTRAP \
-    LLD_IS_LD \
     LLVM_ASSERTIONS \
     LLVM_COV \
     LLVM_CXXFILT \
@@ -150,6 +148,7 @@ __DEFAULT_YES_OPTIONS = \
     NLS_CATALOGS \
     NS_CACHING \
     NTP \
+    NUAGEINIT \
     NVME \
     OFED \
     OPENSSL \
@@ -158,6 +157,7 @@ __DEFAULT_YES_OPTIONS = \
     PKGBOOTSTRAP \
     PMC \
     PPP \
+    PTHREADS_ASSERTIONS \
     QUOTAS \
     RADIUS_SUPPORT \
     RBOOTD \
@@ -166,7 +166,6 @@ __DEFAULT_YES_OPTIONS = \
     SENDMAIL \
     SERVICESDB \
     SETUID_LOGIN \
-    SHARED_TOOLCHAIN \
     SHAREDOCS \
     SOURCELESS \
     SOURCELESS_HOST \
@@ -185,6 +184,7 @@ __DEFAULT_YES_OPTIONS = \
     USB \
     UTMPX \
     VI \
+    VIMAGE \
     VT \
     WIRELESS \
     WPA_SUPPLICANT_EAPOL \
@@ -197,14 +197,18 @@ __DEFAULT_NO_OPTIONS = \
     BHYVE_SNAPSHOT \
     CLANG_EXTRAS \
     CLANG_FORMAT \
+    DIALOG \
     DETECT_TZ_CHANGES \
     DISK_IMAGE_TOOLS_BOOTSTRAP \
+    DTRACE_ASAN \
     DTRACE_TESTS \
     EXPERIMENTAL \
     HESIOD \
+    LOADER_BIOS_TEXTONLY \
     LOADER_VERBOSE \
     LOADER_VERIEXEC_PASS_MANIFEST \
     LLVM_BINUTILS \
+    LLVM_FULL_DEBUGINFO \
     MALLOC_PRODUCTION \
     OFED_EXTRA \
     OPENLDAP \
@@ -212,6 +216,10 @@ __DEFAULT_NO_OPTIONS = \
     RPCBIND_WARMSTART_SUPPORT \
     SORT_THREADS \
     ZONEINFO_LEAPSECONDS_SUPPORT \
+
+__REQUIRED_OPTIONS = \
+    CAPSICUM \
+    CASPER
 
 # LEFT/RIGHT. Left options which default to "yes" unless their corresponding
 # RIGHT option is disabled.
@@ -222,6 +230,12 @@ __DEFAULT_DEPENDENT_OPTIONS= \
 	LOADER_EFI_SECUREBOOT/LOADER_VERIEXEC \
 	LOADER_VERIEXEC_VECTX/LOADER_VERIEXEC \
 	VERIEXEC/BEARSSL \
+
+__SINGLE_OPTIONS = \
+	LIBC_MALLOC
+
+__LIBC_MALLOC_OPTIONS=	jemalloc
+__LIBC_MALLOC_DEFAULT=	jemalloc
 
 # MK_*_SUPPORT options which default to "yes" unless their corresponding
 # MK_* variable is set to "no".
@@ -236,6 +250,7 @@ __DEFAULT_DEPENDENT_OPTIONS= \
     NETGRAPH \
     PAM \
     TESTS \
+    VIMAGE \
     WIRELESS
 __DEFAULT_DEPENDENT_OPTIONS+= ${var}_SUPPORT/${var}
 .endfor
@@ -291,8 +306,8 @@ __DEFAULT_YES_OPTIONS+=LLDB
 .else
 __DEFAULT_NO_OPTIONS+=LLDB
 .endif
-# LIB32 is supported on amd64 and powerpc64
-.if (${__T} == "amd64" || ${__T} == "powerpc64")
+# LIB32 is not supported on all 64-bit architectures.
+.if (${__T} == "amd64" || ${__T:Maarch64*} != "" || ${__T} == "powerpc64")
 __DEFAULT_YES_OPTIONS+=LIB32
 .else
 BROKEN_OPTIONS+=LIB32
@@ -300,6 +315,10 @@ BROKEN_OPTIONS+=LIB32
 # EFI doesn't exist on powerpc (well, officially) and doesn't work on i386
 .if ${__T:Mpowerpc*} || ${__T} == "i386"
 BROKEN_OPTIONS+=EFI
+.endif
+# Bad coupling for libsecure stuff with bearssl and efi, so broken on EFI
+.if ${__T:Mpowerpc*}
+BROKEN_OPTIONS+=BEARSSL		# bearssl brings in secure efi stuff xxx
 .endif
 # OFW is only for powerpc, exclude others
 .if ${__T:Mpowerpc*} == ""
@@ -357,7 +376,7 @@ BROKEN_OPTIONS+= OFED
 .endif
 
 # MK_host_egacy is set by local.sys.mk so is valid here
-.if ${MACHINE} == "host" && ${MK_host_egacy} == "yes"
+.if ${MACHINE:Nhost*} == "" && ${MK_host_egacy} == "yes"
 # we cannot expect tests to work
 BROKEN_OPTIONS+= TESTS
 .endif
@@ -391,10 +410,6 @@ MK_OPENSSL:=	no
 MK_OPENSSH:=	no
 MK_KERBEROS:=	no
 MK_KERBEROS_SUPPORT:=	no
-.endif
-
-.if ${MK_DIALOG} == "no"
-MK_BSDINSTALL:=	no
 .endif
 
 .if ${MK_DTRACE} == "no"
